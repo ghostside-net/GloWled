@@ -2,82 +2,75 @@
 
 [![License: GPL v3](https://img.shields.io/badge/License-GPLv3-blue.svg)](https://www.gnu.org/licenses/gpl-3.0)
 ![Platform: Windows](https://img.shields.io/badge/Platform-Windows-blue.svg)
+![Language: Python](https://img.shields.io/badge/Language-Python-yellow.svg)
 
 A lightweight Windows Ambilight tool for WLED.
 
-GloWled ist ein extrem ressourcenschonendes Python-Programm, das den Bildschirminhalt in Echtzeit ausliest und ohne spürbare Verzögerung an deine WLED-Geräte überträgt. Der Fokus liegt auf maximaler Performance bei minimalem CPU- und RAM-Verbrauch. Nach dem Start läuft die Anwendung unauffällig im System Tray (Hintergrund), damit deine Hardware voll und ganz für Games oder andere Anwendungen zur Verfügung steht.
+GloWled is an ultra-lightweight Windows application that captures your screen content in real-time and transmits it instantly to your WLED devices. Designed with a focus on maximum performance and minimal CPU/RAM footprint, it ensures your system resources remain fully available for gaming or other demanding tasks. 
+
+The application features a simple user interface but is built to stay out of your way, running quietly in the system tray.
 
 ---
 
 ## 🚀 Features
 
-- **Echtzeit-Synchronisation:** Nahezu latenzfreie Übertragung des Bildschirminhalts an WLED.
-- **Multi-Monitor-Support:** Volle Unterstützung für Setups mit mehreren Bildschirmen.
-- **System-Tray-Integration:** Läuft unauffällig im Hintergrund und hält den Desktop frei.
-- **Ultra-Lightweight:** Effiziente capture-Algorithmen für minimale Systemauslastung.
+- **Real-Time Sync:** Virtually latency-free screen capturing and WLED streaming.
+- **Multi-Monitor Support:** Ready out of the box for multi-display setups.
+- **Ultra-Lightweight:** Highly optimized Python code to prevent background stuttering.
+- **System Tray Integration:** Runs quietly in the background without cluttering your taskbar.
 
-## ⚠️ Aktuelle Einschränkungen (Limitations)
+## ⚠️ Current Limitations & Future Platform Support
 
-- **Aktuell nur Windows:** Da das Tool für maximale Performance teils spezifische Windows-APIs nutzt, läuft es derzeit ausschließlich unter Windows. Ein Support für Linux und macOS ist jedoch für die Zukunft angedacht.
+- **Windows Only (For Now):** The tool currently relies on specific Windows APIs for high-performance screen capturing. 
+- **Future Roadmap:** Expansion to **Linux** and potentially **macOS** is planned for future releases once cross-platform capturing backends are integrated.
 
 ---
 
-## 🛠️ Installation & Starten (Development Setup)
+## 🛠️ Installation & How to Run
 
-Da das Projekt in Python geschrieben ist, kannst du es ganz einfach aus dem Quellcode ausführen.
+Since GloWled is open-source, you can easily run it from source or build it yourself.
 
-### Voraussetzungen
+### Prerequisites
 
-Stelle sicher, dass du folgende Tools installiert hast:
-- **Python 3.10** (oder neuer)
-- Das Python-Paketverwaltungstool `pip`
+Make sure you have the following installed on your system:
+- **Python 3.10** (or newer)
+- **Pip** (Python package manager)
 
-### Anleitung
+### Setup Instructions
 
-1. **Repository klonen:**
-   Öffne dein Terminal und führe den Befehl aus dem Abschnitt
+1. **Clone the Repository:**
+   Open your terminal/command prompt and run the command
    ```bash
    git clone https://github.com/ghostside-net/GloWled
    cd GloWled
    ```
-   aus.
 
-3. **Virtuelle Umgebung erstellen (Empfohlen):**
-   Erstelle und aktiviere eine virtuelle Umgebung mit den Befehlen
-   ```bash
-   python -m venv venv
-   venv\Scripts\activate
-   ```
-   aus, um deine globalen Python-Pakete sauber zu halten.
-
-5. **Abhängigkeiten installieren:**
-   Führe den Befehl
+3. **Install Dependencies:**
+   Navigate into the project directory and install the required Python packages using
    ```bash
    pip install -r requirements.txt
    ```
-   aus, um alle benötigten Python-Bibliotheken zu installieren.
 
-7. **Anwendung starten:**
-   Starte GloWled mit dem Befehl
+5. **Run the Application:**
+   Start GloWled by executing the main script via
    ```bash
    python main.py
    ```
-   aus.
 
 ---
 
-## 🔮 Kommende Features & Roadmap
+## 🔮 Upcoming Features & Roadmap
 
-Das Projekt befindet sich in aktiver Entwicklung. Folgende Verbesserungen und Funktionen sind für zukünftige Updates geplant:
+GloWled is under active development. The following features and improvements are planned for upcoming releases:
 
-- [ ] **Erweiterte Einstellungen:** Mehr Optionen zur Feineinstellung der Zonen, Helligkeit und Farbanpassung direkt über die UI.
-- [ ] **Cross-Platform Support:** Portierung der Capture-Logik auf Linux und eventuell macOS.
-- [ ] **Autostart-Option:** Bequemes Aktivieren des Windows-Autostarts über die Benutzeroberfläche.
+- [ ] **Advanced Configuration UI:** Expanded settings for fine-tuning LED zones, color calibration, and brightness.
+- [ ] **Cross-Platform Support:** Bringing the tool to Linux and macOS users.
+- [ ] **Performance Tweaks:** Ongoing optimizations to the screen-capture algorithms.
 
-*Beiträge, Bugfixes und Feature-Requests sind jederzeit willkommen! Erstelle dazu einfach ein Issue oder einen Pull Request.*
+*Contributions, bug reports, and feature requests are highly welcome! Feel free to open an issue or submit a pull request.*
 
 ---
 
-## 📄 Lizenz
+## 📄 License
 
-Dieses Projekt ist unter der **GNU General Public License v3.0 (GPL-3.0)** lizenziert. Das bedeutet, dass jeder den Code frei verwenden, modifizieren und weiterverbreiten darf – solange alle abgeleiteten Werke ebenfalls unter derselben Lizenz stehen und der Quellcode offengelegt wird. Details findest du in der [LICENSE](LICENSE)-Datei.
+This project is licensed under the **GNU GPLv3 License**. This ensures that the software remains free and open-source. Anyone who modifies or redistributes this code must also make their source code publicly available under the same license. See the [LICENSE](LICENSE) file for details.
