@@ -43,35 +43,10 @@ env/
 
 # Testing & Coverage
 .pytest_cache/
+.mypy_cache/
 .coverage
 htmlcov/
 
 # Local logs & environment
 *.log
 .env
-
-# >>> agent-orchestrator-guard >>>
-# Auto-managed by Agent Orchestrator — prevents internal artifact & prompt leakage
-skills.md
-SKILLS.md
-skill.md
-SKILL.md
-.orchestrator*
-.orchestrator/
-orchestrator_logs/
-*.prompt
-.current_task_prompt.md
-.env
-.env.*
-!.env.example
-!.env.sample
-!.env.template
-build_error.log
-*.tmp
-*.temp
-*.bak
-*.swp
-*~
-__pycache__/
-.pytest_cache/
-# <<< agent-orchestrator-guard <<<

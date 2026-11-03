@@ -6,10 +6,9 @@ Features a sleek, intuitive CustomTkinter UI, system tray integration, and low-l
 import argparse
 import os
 import socket
-import sys
 import threading
 import time
-from typing import Any, Dict, List, Optional
+from typing import Any
 
 from config import (
     DEFAULT_CONFIG,
@@ -27,10 +26,10 @@ from worker import RESOLUTION_PRESETS, WLEDWorker
 _GUI_AVAILABLE = False
 try:
     import customtkinter as ctk
-    from PIL import Image, ImageDraw
     import pystray
+    from PIL import Image, ImageDraw
     _GUI_AVAILABLE = True
-except Exception as e:
+except Exception:
     _GUI_AVAILABLE = False
 
 
@@ -45,7 +44,7 @@ class MonitorCard(ctk.CTkFrame if _GUI_AVAILABLE else object):  # type: ignore[m
     including LED counts, edge order presets, and direction inversion.
     """
 
-    def __init__(self, master, config_data: Dict[str, Any], remove_callback, **kwargs):
+    def __init__(self, master, config_data: dict[str, Any], remove_callback, **kwargs):
         if not _GUI_AVAILABLE:
             return
         super().__init__(
@@ -167,7 +166,7 @@ class MonitorCard(ctk.CTkFrame if _GUI_AVAILABLE else object):  # type: ignore[m
             text_color="#e4e4e7",
         ).pack(anchor="w")
 
-        self.current_order: List[str] = list(
+        self.current_order: list[str] = list(
             config_data.get("edge_order", ["left", "top", "right", "bottom"])
         )
 
@@ -198,7 +197,7 @@ class MonitorCard(ctk.CTkFrame if _GUI_AVAILABLE else object):  # type: ignore[m
         btn_row = ctk.CTkFrame(self.order_frame, fg_color="transparent")
         btn_row.pack(fill="x", pady=2)
 
-        self.order_buttons: Dict[str, ctk.CTkButton] = {}
+        self.order_buttons: dict[str, ctk.CTkButton] = {}
         for edge in ["left", "top", "right", "bottom"]:
             label_map = {"left": "LINKS", "top": "OBEN", "right": "RECHTS", "bottom": "UNTEN"}
             btn = ctk.CTkButton(
@@ -246,7 +245,7 @@ class MonitorCard(ctk.CTkFrame if _GUI_AVAILABLE else object):  # type: ignore[m
         ).pack(anchor="w", pady=(0, 4))
 
         dirs = config_data.get("edge_directions", {"left": -1, "top": 1, "right": 1, "bottom": -1})
-        self.dir_vars: Dict[str, ctk.BooleanVar] = {}
+        self.dir_vars: dict[str, ctk.BooleanVar] = {}
 
         cb_row = ctk.CTkFrame(self.dir_frame, fg_color="transparent")
         cb_row.pack(fill="x")
@@ -285,7 +284,7 @@ class MonitorCard(ctk.CTkFrame if _GUI_AVAILABLE else object):  # type: ignore[m
             self.current_order.append(edge)
             self._refresh_order_display()
 
-    def set_order(self, order: List[str]):
+    def set_order(self, order: list[str]):
         self.current_order = list(order)
         self._refresh_order_display()
 
@@ -310,25 +309,25 @@ class MonitorCard(ctk.CTkFrame if _GUI_AVAILABLE else object):  # type: ignore[m
     def on_remove(self):
         self.remove_callback(self)
 
-    def get_config(self) -> Dict[str, Any]:
+    def get_config(self) -> dict[str, Any]:
         try:
             idx = int(self.idx_entry.get().strip())
         except ValueError:
             idx = 1
         try:
-            l = int(self.led_left.get().strip())
-            t = int(self.led_top.get().strip())
-            r = int(self.led_right.get().strip())
-            b = int(self.led_bottom.get().strip())
+            led_l = int(self.led_left.get().strip())
+            led_t = int(self.led_top.get().strip())
+            led_r = int(self.led_right.get().strip())
+            led_b = int(self.led_bottom.get().strip())
         except ValueError:
-            l, t, r, b = 9, 15, 9, 15
+            led_l, led_t, led_r, led_b = 9, 15, 9, 15
 
         return {
             "mss_index": idx,
-            "leds_left": l,
-            "leds_top": t,
-            "leds_right": r,
-            "leds_bottom": b,
+            "leds_left": led_l,
+            "leds_top": led_t,
+            "leds_right": led_r,
+            "leds_bottom": led_b,
             "edge_order": list(self.current_order) if self.current_order else ["left", "top", "right", "bottom"],
             "edge_directions": {edge: (-1 if var.get() else 1) for edge, var in self.dir_vars.items()},
         }
@@ -360,9 +359,9 @@ class GloWledApp(ctk.CTk if _GUI_AVAILABLE else object):  # type: ignore[misc]
         self.protocol("WM_DELETE_WINDOW", self.hide_window)
 
         self.app_config = load_config()
-        self.worker: Optional[WLEDWorker] = None
-        self.tray_icon: Optional[pystray.Icon] = None
-        self.monitor_cards: List[MonitorCard] = []
+        self.worker: WLEDWorker | None = None
+        self.tray_icon: pystray.Icon | None = None
+        self.monitor_cards: list[MonitorCard] = []
 
         # Top Header Banner
         self._build_header()
@@ -743,6 +742,30 @@ class GloWledApp(ctk.CTk if _GUI_AVAILABLE else object):  # type: ignore[misc]
         self.smooth_slider.set(smooth_val)
         self.smooth_slider.pack(side="left", fill="x", expand=True, padx=(10, 0))
 
+        # Black Level Cutoff Threshold Slider
+        row_black = ctk.CTkFrame(card, fg_color="transparent")
+        row_black.pack(fill="x", padx=16, pady=12)
+
+        black_thresh_val = int(self.app_config.get("black_threshold", 15))
+        self.black_thresh_label = ctk.CTkLabel(
+            row_black,
+            text=f"Schwarz-Schwelle: {black_thresh_val}",
+            font=ctk.CTkFont(size=12),
+            width=130,
+            anchor="w",
+        )
+        self.black_thresh_label.pack(side="left")
+
+        self.black_thresh_slider = ctk.CTkSlider(
+            row_black,
+            from_=0,
+            to=50,
+            number_of_steps=50,
+            command=lambda v: self.black_thresh_label.configure(text=f"Schwarz-Schwelle: {int(float(v))}"),
+        )
+        self.black_thresh_slider.set(black_thresh_val)
+        self.black_thresh_slider.pack(side="left", fill="x", expand=True, padx=(10, 0))
+
         # Edge Sampling Depth Slider (Letterbox Crop)
         row_depth = ctk.CTkFrame(card, fg_color="transparent")
         row_depth.pack(fill="x", padx=16, pady=12)
@@ -781,9 +804,9 @@ class GloWledApp(ctk.CTk if _GUI_AVAILABLE else object):  # type: ignore[misc]
 
         options = list(RESOLUTION_PRESETS.keys())
         self.res_menu = ctk.CTkOptionMenu(row_res, values=options)
-        cur_res = self.app_config.get("resolution", "Balance (128x72)")
+        cur_res = self.app_config.get("resolution", "Auto (Adaptiv)")
         if cur_res not in options:
-            cur_res = "Balance (128x72)"
+            cur_res = "Auto (Adaptiv)"
         self.res_menu.set(cur_res)
         self.res_menu.pack(side="left", fill="x", expand=True, padx=(10, 0))
 
@@ -933,7 +956,7 @@ class GloWledApp(ctk.CTk if _GUI_AVAILABLE else object):  # type: ignore[misc]
 
         threading.Thread(target=_do_test, daemon=True).start()
 
-    def add_monitor_card(self, config_data: Optional[Dict[str, Any]] = None):
+    def add_monitor_card(self, config_data: dict[str, Any] | None = None):
         if config_data is None:
             config_data = DEFAULT_CONFIG["monitors"][0].copy()
             config_data["mss_index"] = len(self.monitor_cards) + 1
@@ -963,7 +986,7 @@ class GloWledApp(ctk.CTk if _GUI_AVAILABLE else object):  # type: ignore[misc]
     def on_autostart_toggle(self):
         toggle_autostart(self.autostart_var.get())
 
-    def gather_config(self) -> Dict[str, Any]:
+    def gather_config(self) -> dict[str, Any]:
         ip = self.ip_entry.get().strip() or "127.0.0.1"
         try:
             port = int(self.port_entry.get().strip())
@@ -973,10 +996,16 @@ class GloWledApp(ctk.CTk if _GUI_AVAILABLE else object):  # type: ignore[misc]
         brightness = float(self.bri_slider.get())
         saturation = float(self.sat_slider.get())
         smoothing = float(self.smooth_slider.get())
+        black_threshold = (
+            float(self.black_thresh_slider.get())
+            if hasattr(self, "black_thresh_slider")
+            else float(self.app_config.get("black_threshold", 15))
+        )
         edge_depth = float(self.depth_slider.get())
         resolution = self.res_menu.get()
         eco_mode = bool(self.eco_var.get())
         start_minimized = bool(self.minimized_var.get())
+        oversample_factor = float(self.app_config.get("oversample_factor", 2.0))
 
         monitors = [c.get_config() for c in self.monitor_cards]
         if not monitors:
@@ -989,8 +1018,10 @@ class GloWledApp(ctk.CTk if _GUI_AVAILABLE else object):  # type: ignore[misc]
             "brightness": brightness,
             "saturation": saturation,
             "smoothing": smoothing,
+            "black_threshold": black_threshold,
             "edge_depth": edge_depth,
             "resolution": resolution,
+            "oversample_factor": oversample_factor,
             "eco_mode": eco_mode,
             "start_minimized": start_minimized,
             "monitors": monitors,
@@ -1013,10 +1044,12 @@ class GloWledApp(ctk.CTk if _GUI_AVAILABLE else object):  # type: ignore[misc]
             monitor_configs=config["monitors"],
             brightness=config.get("brightness", 1.0),
             saturation=config.get("saturation", 1.0),
-            resolution=config.get("resolution", "Balance (128x72)"),
+            resolution=config.get("resolution", "Auto (Adaptiv)"),
             smoothing=config.get("smoothing", 0.1),
             edge_depth=config.get("edge_depth", 0.08),
             eco_mode=config.get("eco_mode", True),
+            black_threshold=config.get("black_threshold", 15),
+            oversample_factor=config.get("oversample_factor", 2.0),
         )
         self.worker.start()
 
@@ -1054,11 +1087,17 @@ class GloWledApp(ctk.CTk if _GUI_AVAILABLE else object):  # type: ignore[misc]
                 monitor_configs=config["monitors"],
                 brightness=config.get("brightness", 1.0),
                 saturation=config.get("saturation", 1.0),
-                resolution=config.get("resolution", "Balance (128x72)"),
+                resolution=config.get("resolution", "Auto (Adaptiv)"),
                 smoothing=config.get("smoothing", 0.1),
                 edge_depth=config.get("edge_depth", 0.08),
                 eco_mode=config.get("eco_mode", True),
+                black_threshold=config.get("black_threshold", 15),
+                oversample_factor=config.get("oversample_factor", 2.0),
             )
+            self.worker.start()
+            self.status_badge.configure(text="● STREAMING AKTIV", text_color="#10b981", fg_color="#064e3b")
+            self.apply_btn.configure(text="✔ EINSTELLUNGEN AKTUALISIERT")
+            self.stop_btn.configure(state="normal")
             self.worker.start()
             self.status_badge.configure(text="● STREAMING AKTIV", text_color="#10b981", fg_color="#064e3b")
             self.apply_btn.configure(text="✔ EINSTELLUNGEN AKTUALISIERT")
@@ -1146,10 +1185,12 @@ def run_headless_streaming():
         monitor_configs=cfg["monitors"],
         brightness=cfg.get("brightness", 1.0),
         saturation=cfg.get("saturation", 1.0),
-        resolution=cfg.get("resolution", "Balance (128x72)"),
+        resolution=cfg.get("resolution", "Auto (Adaptiv)"),
         smoothing=cfg.get("smoothing", 0.1),
         edge_depth=cfg.get("edge_depth", 0.08),
         eco_mode=cfg.get("eco_mode", True),
+        black_threshold=cfg.get("black_threshold", 15),
+        oversample_factor=cfg.get("oversample_factor", 2.0),
     )
     worker.start()
     print("Worker running. Press Ctrl+C to terminate.")

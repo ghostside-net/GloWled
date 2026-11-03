@@ -16,11 +16,13 @@ Whether you are deep in an intense gaming session, enjoying a cinematic movie ni
 ## ⚡ Highlights & Key Features
 
 - 🏎️ **Blazing Real-Time Performance:** GPU/DirectX Desktop Duplication (`DXCam`) captures screens with sub-millisecond overhead.
+- 📐 **Adaptive Sampling Resolution (Nyquist-Shannon):** Automatically computes optimal downscaling resolutions based on per-edge LED counts with configurable oversampling (2.0x–4.0x), eliminating aliasing while avoiding redundant processing.
+- 🌑 **True Black Level & Dark Cutoff:** Eliminates unwanted white standby glow on dark or black scenes. Configurable `black_threshold` completely shuts LEDs off (`(0, 0, 0)`) below the threshold, with a smooth Hermite smoothstep fade-out to prevent flicker.
+- 📏 **Configurable Edge Depth & ROIs:** Calibrate sampling margin depth via relative percentages (0–50%) or absolute pixel distances, automatically handling letterbox black bars and asymmetric aspect ratios without edge overlap.
 - 🍃 **Intelligent Eco Mode:** Dynamically detects static screens (reading, paused media, desktop idling) and throttles redundant processing, dropping CPU load to nearly **0.1%**!
 - 🎨 **Cinematic Color & Smoothing:**
   - **Color Smoothing:** Adjustable exponential transition filter (0–85%) prevents jarring flicker.
   - **Saturation & Brightness Multipliers:** Give your room that extra vibrant punch or dim down for nighttime sessions.
-  - **Edge Sampling Depth:** Customize margin crop (4–25%) to ignore letterbox black bars in movies.
 - 🖥️ **Multi-Monitor & Smart Edge Routing:**
   - Multi-display setup out-of-the-box with automatic display detection.
   - 1-click presets: *Clockwise*, *Counter-Clockwise*, and custom interactive edge sequencing.
@@ -37,9 +39,31 @@ Whether you are deep in an intense gaming session, enjoying a cinematic movie ni
 The application offers an intuitive tabbed interface designed for quick tuning:
 - **⚡ Dashboard:** Live status badge, active target device, real-time FPS counter, and 1-click UDP ping check.
 - **⚙️ WLED & Netzwerk:** Target IP & Port, FPS sliders with quick presets (Eco 30 FPS, Smooth 45 FPS, Ultra 60 FPS), and Eco Mode toggles.
-- **🎨 Bild & Effekte:** Live brightness, saturation boost, color smoothing, and border depth calibration.
+- **🎨 Bild & Effekte:** Live brightness, saturation boost, color smoothing, border sampling depth, black cutoff threshold, and adaptive resolution presets.
 - **🖥️ Monitore:** Card-based multi-display management, per-side LED counters, total LED tally, and edge ordering.
 - **ℹ️ Info & Hilfe:** Built-in connection guide and shortcuts.
+
+---
+
+## ⚙️ Configuration Reference
+
+Configuration is persisted in JSON format (`config.json`) in `%APPDATA%\GloWled` (Windows) or `~/.glowled` (Linux):
+
+| Parameter | Type | Default | Description |
+| :--- | :--- | :--- | :--- |
+| `ip` | `str` | `"127.0.0.1"` | Target IP address of the WLED device. |
+| `port` | `int` | `21324` | WLED realtime UDP (DRGB) listener port. |
+| `fps` | `int` | `30` | Streaming frame rate (1–120 FPS). |
+| `brightness` | `float` | `1.0` | Global brightness multiplier (0.1x–3.0x). |
+| `saturation` | `float` | `1.0` | Color saturation multiplier (0.0x–3.0x). |
+| `smoothing` | `float` | `0.1` | Exponential moving average filter factor (0.0–0.85). |
+| `black_threshold` | `int` | `15` | Pixel intensity cutoff below which LEDs turn completely off (`(0, 0, 0)`). |
+| `edge_depth` | `float \| int` | `0.08` | Border sampling depth as relative ratio (`0.02`–`0.50`) or pixel distance. |
+| `resolution` | `str` | `"Auto (Adaptiv)"` | Downscaling mode: `"Auto (Adaptiv)"` or static presets. |
+| `oversample_factor` | `float` | `2.0` | Nyquist-Shannon oversampling factor for adaptive resolution (1.0x–8.0x). |
+| `eco_mode` | `bool` | `true` | Drops CPU usage on static screens by throttling redundant frames. |
+| `start_minimized` | `bool` | `false` | Start silently in system tray without opening window. |
+| `monitors` | `list` | *See below* | Per-monitor LED counts, edge order, and direction mappings. |
 
 ---
 
@@ -101,25 +125,37 @@ The compiled binary will be located in the `dist/` directory (`dist/GloWled.exe`
 
 ---
 
-## 🧪 Testing
+## 🧪 Testing & Code Quality
 
-GloWled comes with a complete automated test suite covering configuration persistence, backward compatibility, edge cropping, SIMD color processing, and thread safety:
+GloWled comes with an automated test suite covering configuration persistence, backward compatibility, edge cropping, SIMD color processing, adaptive resolution, black level handling, and thread safety:
 
 ```bash
+# Run pytest test suite
 pytest -v
+
+# Run linting and code formatting validation
+ruff check .
+
+# Run static type checking
+mypy .
 ```
 
 ---
 
-## 🔮 Roadmap
+## 📝 Changelog
 
-- [x] **Advanced Configuration UI:** Fine-tuning LED counts, interactive edge ordering, and color calibration.
-- [x] **Performance Optimization:** Zero-copy SIMD processing, intelligent static-screen detection, and sub-1% CPU usage.
-- [x] **Cross-Platform Engine:** Graceful fallback capture backend (MSS) alongside DirectX (DXCam).
-- [ ] **Audio Reactive Sync:** Optional sound-reactive ambient glow modes.
-- [ ] **Zone Segment Mapping:** Advanced matrix and multiple strip segment assignment.
+### v1.2.0
+- **Adaptive Sampling Resolution:** Dynamic resolution scaling based on Nyquist-Shannon sampling theorem (`oversample_factor`), with automatic fallbacks for 0 or outlier LED counts.
+- **Configurable Edge Depth & ROIs:** Support for relative percentages (0.0 to 0.5) and absolute pixel distances with overlap prevention and minimum 1-pixel clamping.
+- **True Black Level Handling:** Fixed black screen standby glow; introduced `black_threshold` with Hermite smoothstep fade-out transfer curve and sanitized 4-channel BGRA/RGBA alpha handling.
+- **Modern Packaging & Tooling:** Added `pyproject.toml` with strict Ruff and Mypy integration.
+- **Expanded Test Suite:** Added 13 new unit and integration tests covering resolution adaptation, ROI calculation, black level cutoff, and alpha channel sanitization.
 
-*Feedback, bug reports, and pull requests are warmly welcomed! Feel free to open an issue or contribute.*
+### v1.1.0
+- Modern CustomTkinter UI with dark mode theme.
+- Exponential color smoothing transition filter.
+- Intelligent Eco Mode for sub-1% CPU usage during static screen states.
+- System tray background minimization and silent autostart.
 
 ---
 
