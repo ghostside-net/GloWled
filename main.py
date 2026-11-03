@@ -6,6 +6,7 @@ Features a sleek, intuitive CustomTkinter UI, system tray integration, and low-l
 import argparse
 import os
 import socket
+import sys
 import threading
 import time
 from typing import Any
@@ -15,12 +16,64 @@ from config import (
     check_autostart,
     detect_displays,
     get_config_file_path,
+    get_current_executable_path,
     load_config,
     resource_path,
     save_config,
+    sync_portable_environment,
     toggle_autostart,
 )
 from worker import RESOLUTION_PRESETS, WLEDWorker
+
+
+def acquire_single_instance_lock() -> Any:
+    """Acquire single-instance mutex on Windows to prevent duplicate streaming workers."""
+    if sys.platform != "win32":
+        return True
+    try:
+        import ctypes
+
+        mutex_name = "Global\\GloWled_SingleInstance_Mutex_v1"
+        mutex = ctypes.windll.kernel32.CreateMutexW(None, False, mutex_name)
+        last_error = ctypes.windll.kernel32.GetLastError()
+        error_already_exists = 183
+        if last_error == error_already_exists:
+            return None
+        return mutex
+    except Exception:
+        return True
+
+
+def bring_existing_instance_to_front() -> None:
+    """Restore and bring existing GloWled application window to foreground on Windows."""
+    if sys.platform != "win32":
+        return
+    try:
+        import ctypes
+        from ctypes import wintypes
+
+        user32 = ctypes.windll.user32
+        target_hwnd = None
+
+        def enum_windows_proc(hwnd: Any, lparam: Any) -> bool:
+            nonlocal target_hwnd
+            length = user32.GetWindowTextLengthW(hwnd)
+            if length > 0:
+                buff = ctypes.create_unicode_buffer(length + 1)
+                user32.GetWindowTextW(hwnd, buff, length + 1)
+                if "GloWled" in buff.value:
+                    target_hwnd = hwnd
+                    return False
+            return True
+
+        wnd_enum_proc_type = ctypes.WINFUNCTYPE(ctypes.c_bool, wintypes.HWND, wintypes.LPARAM)
+        user32.EnumWindows(wnd_enum_proc_type(enum_windows_proc), 0)
+
+        if target_hwnd:
+            user32.ShowWindow(target_hwnd, 9)  # SW_RESTORE
+            user32.SetForegroundWindow(target_hwnd)
+    except Exception:
+        pass
 
 # Guard CustomTkinter and GUI imports for headless compatibility
 _GUI_AVAILABLE = False
@@ -339,7 +392,12 @@ class GloWledApp(ctk.CTk if _GUI_AVAILABLE else object):  # type: ignore[misc]
     live visual status, connection diagnostics, and smooth background streaming.
     """
 
-    def __init__(self, first_start_mode: bool = False):
+    def __init__(
+        self,
+        first_start_mode: bool = False,
+        start_minimized_arg: bool = False,
+        sync_info: dict[str, Any] | None = None,
+    ):
         if not _GUI_AVAILABLE:
             return
         super().__init__()
@@ -348,6 +406,7 @@ class GloWledApp(ctk.CTk if _GUI_AVAILABLE else object):  # type: ignore[misc]
         self.geometry("620x780")
         self.minsize(580, 700)
         self.configure(fg_color="#0f0f11")
+        self.sync_info = sync_info or {}
 
         icon_path = resource_path("icon.ico")
         if os.path.exists(icon_path):
@@ -393,12 +452,28 @@ class GloWledApp(ctk.CTk if _GUI_AVAILABLE else object):  # type: ignore[misc]
         # Bottom Action Bar
         self._build_bottom_bar()
 
-        # Start State
-        if first_start_mode:
-            self.deiconify()
-        else:
+        # Start State handling:
+        # If launched with --autostart or --minimized, or config start_minimized is True:
+        # run silently in tray. Otherwise, present the window for the user!
+        should_minimize = start_minimized_arg or bool(self.app_config.get("start_minimized", False))
+
+        if should_minimize:
             self.withdraw()
             self.start_worker_silent()
+        else:
+            self.deiconify()
+
+        # Dynamic notification on first start or after moving the executable
+        if first_start_mode:
+            self.status_badge.configure(text="● ERSTSTART", fg_color="#065f46", text_color="#34d399")
+            self.dash_status_label.configure(
+                text="Willkommen bei GloWled! Automatische Einrichtung aktiv (Autostart & Verknüpfungen wurden eingerichtet)."
+            )
+        elif self.sync_info.get("path_migrated"):
+            self.status_badge.configure(text="● PFAD AKTUALISIERT", fg_color="#1e3a8a", text_color="#60a5fa")
+            self.dash_status_label.configure(
+                text=f"Neuer Programm-Pfad erkannt und synchronisiert: {self.sync_info.get('current_path')}"
+            )
 
     def _build_header(self):
         header_frame = ctk.CTkFrame(self, fg_color="transparent")
@@ -864,13 +939,17 @@ class GloWledApp(ctk.CTk if _GUI_AVAILABLE else object):  # type: ignore[misc]
             "GloWled ist eine hochperformante, ressourcenschonende Ambilight-Software für WLED.\n"
             "Sie erfasst den Bildschirminhalt in Echtzeit via GPU/DirectX Desktop Duplication\n"
             "und überträgt die Randfarben ohne spürbare Latenz per UDP an Ihren ESP/WLED-Controller.\n\n"
+            "📦 Ausführung: Standalone Portable Exe (selbsteinrichtend & verschiebesicher)\n"
+            f"📍 Programm-Pfad: {get_current_executable_path()}\n"
+            f"⚙️ Konfigurations-Pfad: {get_config_file_path()}\n\n"
             "📌 WLED Einrichtung:\n"
             "1. Öffnen Sie die WLED-Weboberfläche im Browser.\n"
             "2. Gehen Sie auf 'Config' -> 'Sync Interfaces'.\n"
             "3. Stellen Sie sicher, dass 'Receive: Realtime' aktiv ist (UDP Port 21324).\n\n"
             "📄 Lizenz: GNU General Public License v3 (GPLv3)\n"
             "💻 Plattform: Windows Desktop (mit automatischem Cross-Platform Fallback)\n"
-            "🌐 Projekt: https://github.com/ghostside-net/GloWled"
+            "🌐 Projekt: https://github.com/ghostside-net/GloWled\n"
+            "🏷️ Version: v1.3.0"
         )
         ctk.CTkLabel(
             card,
@@ -984,7 +1063,10 @@ class GloWledApp(ctk.CTk if _GUI_AVAILABLE else object):  # type: ignore[misc]
         )
 
     def on_autostart_toggle(self):
-        toggle_autostart(self.autostart_var.get())
+        enabled = bool(self.autostart_var.get())
+        toggle_autostart(enabled)
+        self.app_config["autostart"] = enabled
+        save_config(self.app_config)
 
     def gather_config(self) -> dict[str, Any]:
         ip = self.ip_entry.get().strip() or "127.0.0.1"
@@ -1005,6 +1087,8 @@ class GloWledApp(ctk.CTk if _GUI_AVAILABLE else object):  # type: ignore[misc]
         resolution = self.res_menu.get()
         eco_mode = bool(self.eco_var.get())
         start_minimized = bool(self.minimized_var.get())
+        autostart = bool(self.autostart_var.get())
+        last_known_exe_path = str(self.app_config.get("last_known_exe_path", get_current_executable_path()))
         oversample_factor = float(self.app_config.get("oversample_factor", 2.0))
 
         monitors = [c.get_config() for c in self.monitor_cards]
@@ -1024,6 +1108,8 @@ class GloWledApp(ctk.CTk if _GUI_AVAILABLE else object):  # type: ignore[misc]
             "oversample_factor": oversample_factor,
             "eco_mode": eco_mode,
             "start_minimized": start_minimized,
+            "autostart": autostart,
+            "last_known_exe_path": last_known_exe_path,
             "monitors": monitors,
         }
         save_config(cfg)
@@ -1208,11 +1294,27 @@ def main():
     parser = argparse.ArgumentParser(description="GloWled — High-Performance WLED Ambilight Controller")
     parser.add_argument("--headless", action="store_true", help="Run in background CLI streaming mode without GUI")
     parser.add_argument("--version", action="store_true", help="Print version and exit")
+    parser.add_argument("--autostart", action="store_true", help="Run silently in system tray on system boot")
+    parser.add_argument("--minimized", action="store_true", help="Start minimized to system tray")
     args = parser.parse_args()
 
     if args.version:
-        print("GloWled v1.1.0")
+        print("GloWled v1.3.0")
         return
+
+    # Single-instance enforcement (Windows)
+    single_instance_lock = acquire_single_instance_lock()
+    if not single_instance_lock:
+        if args.autostart or args.minimized:
+            # Background launch while already active: exit silently
+            return
+        bring_existing_instance_to_front()
+        return
+
+    # Automatic environment configuration, autostart, and folder migration check
+    cfg = load_config()
+    is_first_start = not os.path.exists(get_config_file_path())
+    sync_info = sync_portable_environment(cfg)
 
     if args.headless or not _GUI_AVAILABLE:
         if not _GUI_AVAILABLE and not args.headless:
@@ -1220,8 +1322,12 @@ def main():
         run_headless_streaming()
         return
 
-    is_first_start = not os.path.exists(get_config_file_path())
-    app = GloWledApp(first_start_mode=is_first_start)
+    start_min = bool(args.autostart or args.minimized)
+    app = GloWledApp(
+        first_start_mode=is_first_start,
+        start_minimized_arg=start_min,
+        sync_info=sync_info,
+    )
 
     # Start system tray icon in a dedicated daemon thread
     threading.Thread(target=app.create_tray_icon, daemon=True).start()

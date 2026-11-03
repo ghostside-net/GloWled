@@ -29,7 +29,10 @@ Whether you are deep in an intense gaming session, enjoying a cinematic movie ni
   - Individual edge direction inversion (flip left, top, right, or bottom LED strips independently).
 - 🪟 **Modern, Intuitive GUI:** Sleek dark-mode interface powered by CustomTkinter, featuring real-time connection diagnostics (WLED UDP ping test).
 - 🛡️ **Unobtrusive System Tray Integration:** Closes to the system tray, with quick controls to start, pause, or configure ambient lighting.
-- 🚀 **Silent Background Autostart:** Can launch silently minimized to the tray when Windows boots.
+- 🚀 **Zero-Installer Portable Architecture:** Self-configuring standalone `.exe` that sets up autostart and Start Menu shortcuts on first launch, without requiring an external installer.
+- 🔄 **Folder-Move Resilience:** Relocate `GloWled.exe` anywhere at any time — on launch, it automatically detects the new path and dynamically resynchronizes Windows Autostart and shortcuts.
+- 🛡️ **Single-Instance Enforcement:** Prevents duplicate running instances and UDP packet collisions, restoring the active window when launched again.
+- 🪟 **Silent Background Autostart:** Seamless background streaming minimized to the tray when Windows boots via `--autostart`.
 - 🐧 **Cross-Platform Compatibility:** Automatic fallback to MSS capture engine for Linux and environments without DXGI.
 
 ---
@@ -143,6 +146,14 @@ mypy .
 ---
 
 ## 📝 Changelog
+
+### v1.3.0
+- **Standalone Portable Architecture (Zero-Installer):** Replaced separate installer with self-configuring portable executable.
+- **Automated First-Run Setup:** Initializes configuration, configures Windows background autostart, and sets up Start Menu shortcuts out-of-the-box.
+- **Folder Migration Resilience:** Moving `GloWled.exe` to another folder or drive automatically detects path changes on startup and resynchronizes autostart scripts (`GloWled.vbs`) and shortcuts.
+- **Single-Instance Mutex Enforcement:** Restores and brings the active window into focus when opened interactively, avoiding duplicate screen capture loops and network stream conflicts.
+- **Dedicated Background Launch Flag (`--autostart` / `--minimized`):** Clean separation between user interactive clicks (opens GUI) and Windows boot autostart (runs silently minimized to tray).
+- **Expanded Test Coverage:** Added unit test suite covering portable path resolution, autostart target parsing, first-run initialization, and relocation synchronization.
 
 ### v1.2.0
 - **Adaptive Sampling Resolution:** Dynamic resolution scaling based on Nyquist-Shannon sampling theorem (`oversample_factor`), with automatic fallbacks for 0 or outlier LED counts.

@@ -6,6 +6,8 @@ from __future__ import annotations
 
 import json
 import os
+import re
+import subprocess
 import sys
 from typing import Any
 
@@ -22,6 +24,8 @@ DEFAULT_CONFIG: dict[str, Any] = {
     "eco_mode": True,
     "resolution": "Auto (Adaptiv)",
     "start_minimized": False,
+    "autostart": True,
+    "last_known_exe_path": "",
     "monitors": [
         {
             "mss_index": 1,
@@ -127,6 +131,19 @@ def save_config(config_dict: dict[str, Any]) -> bool:
         return False
 
 
+def get_current_executable_path() -> str:
+    """Return the absolute path to the current running executable or script.
+
+    Returns:
+        str: Absolute path to the executable (when frozen) or main python entry script.
+    """
+    if getattr(sys, "frozen", False):
+        return os.path.abspath(sys.executable)
+    if sys.argv and sys.argv[0]:
+        return os.path.abspath(sys.argv[0])
+    return os.path.abspath(sys.executable)
+
+
 def get_autostart_path() -> str:
     """Return path to Windows Startup folder VBScript.
 
@@ -139,6 +156,20 @@ def get_autostart_path() -> str:
             appdata, "Microsoft", "Windows", "Start Menu", "Programs", "Startup", "GloWled.vbs"
         )
     return os.path.join(os.path.expanduser("~"), ".glowled_autostart.vbs")
+
+
+def get_start_menu_shortcut_path() -> str:
+    """Return path to Windows Start Menu Programs shortcut.
+
+    Returns:
+        str: Absolute path to Start Menu .lnk shortcut.
+    """
+    appdata = os.getenv("APPDATA")
+    if appdata:
+        return os.path.join(
+            appdata, "Microsoft", "Windows", "Start Menu", "Programs", "GloWled.lnk"
+        )
+    return os.path.join(os.path.expanduser("~"), ".glowled_startmenu.lnk")
 
 
 def check_autostart() -> bool:
@@ -157,11 +188,91 @@ def check_autostart() -> bool:
     return os.path.exists(get_autostart_path())
 
 
-def toggle_autostart(enable: bool) -> bool:
+def get_autostart_target() -> str | None:
+    """Extract the executable path referenced inside the autostart VBScript.
+
+    Returns:
+        str | None: Absolute target path if found, None if file does not exist or cannot be parsed.
+    """
+    path = get_autostart_path()
+    if not os.path.exists(path):
+        return None
+    try:
+        with open(path, encoding="utf-8", errors="ignore") as f:
+            content = f.read()
+        # Look for explicit Run command patterns:
+        # e.g., Run """<path>"" --autostart" or Run """<path>"""
+        m = re.search(r'Run\s+"""([^"\n]+)"""', content)
+        if m:
+            return m.group(1).strip()
+        m2 = re.search(r'Run\s+"""([^"\n]+)""\s+--autostart', content)
+        if m2:
+            return m2.group(1).strip()
+        # Multi-quoted format: Run """<python>"" ""/<script>"" --autostart"
+        m3 = re.findall(r'""([^"\n]+)""', content)
+        if len(m3) >= 2:
+            return m3[1].strip()
+        elif m3:
+            return m3[0].strip()
+    except Exception as e:
+        print(f"[Autostart] Error inspecting autostart target: {e}")
+    return None
+
+
+def create_or_update_start_menu_shortcut(target_path: str | None = None) -> bool:
+    """Create or update the Windows Start Menu shortcut to point to the current executable.
+
+    Args:
+        target_path: Target executable path. Defaults to get_current_executable_path().
+
+    Returns:
+        bool: True if shortcut created or updated successfully, False on error or non-Windows.
+    """
+    if sys.platform != "win32":
+        return False
+    appdata = os.getenv("APPDATA")
+    if not appdata:
+        return False
+
+    if target_path is None:
+        target_path = get_current_executable_path()
+
+    shortcut_path = get_start_menu_shortcut_path()
+    icon_path = resource_path("icon.ico")
+    work_dir = os.path.dirname(target_path)
+
+    try:
+        parent_dir = os.path.dirname(shortcut_path)
+        if parent_dir and not os.path.exists(parent_dir):
+            os.makedirs(parent_dir, exist_ok=True)
+
+        ps_cmd = (
+            f"$ws = New-Object -ComObject WScript.Shell; "
+            f"$s = $ws.CreateShortcut('{shortcut_path}'); "
+            f"$s.TargetPath = '{target_path}'; "
+            f"$s.WorkingDirectory = '{work_dir}'; "
+            f"$s.Description = 'GloWled — High-Performance WLED Ambilight Controller'; "
+            + (f"$s.IconLocation = '{icon_path},0'; " if os.path.exists(icon_path) else "")
+            + "$s.Save()"
+        )
+        subprocess.run(
+            ["powershell", "-NoProfile", "-NonInteractive", "-Command", ps_cmd],
+            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+            timeout=5,
+            check=False,
+        )
+        return True
+    except Exception as e:
+        print(f"[Shortcut] Failed to create Start Menu shortcut: {e}")
+        return False
+
+
+def toggle_autostart(enable: bool, exec_path: str | None = None) -> bool:
     """Enable or disable Windows background startup entry.
 
     Args:
         enable: True to create startup shortcut, False to remove it.
+        exec_path: Optional explicit executable path. Defaults to get_current_executable_path().
 
     Returns:
         bool: True if operation completed successfully.
@@ -175,13 +286,16 @@ def toggle_autostart(enable: bool) -> bool:
     )
 
     if enable:
+        if exec_path is None:
+            exec_path = get_current_executable_path()
+
         if getattr(sys, "frozen", False):
-            exec_path = sys.executable
-            vbs_content = f'CreateObject("Wscript.Shell").Run """{exec_path}""", 0, False'
+            vbs_content = f'CreateObject("Wscript.Shell").Run """{exec_path}"" --autostart", 0, False\n'
         else:
-            script_path = os.path.abspath(sys.argv[0])
             python_path = sys.executable
-            vbs_content = f'CreateObject("Wscript.Shell").Run """{python_path}"" ""{script_path}""", 0, False'
+            vbs_content = (
+                f'CreateObject("Wscript.Shell").Run """{python_path}"" ""{exec_path}"" --autostart", 0, False\n'
+            )
 
         try:
             parent_dir = os.path.dirname(path)
@@ -209,6 +323,78 @@ def toggle_autostart(enable: bool) -> bool:
                     print(f"[Autostart] Error removing autostart entry {p}: {e}")
                     removed = False
         return removed
+
+
+def sync_portable_environment(cfg: dict[str, Any]) -> dict[str, Any]:
+    """Ensure complete setup on first launch and update paths if the executable was moved.
+
+    Handles:
+    - First start initialization (autostart, start menu shortcut, config persistence).
+    - Executable folder migration: if GloWled is moved to another folder or drive,
+      updates the Startup VBScript and Start Menu shortcuts automatically so that
+      everything continues working seamlessly.
+    - Legacy path cleanup (migrates old AmbilightController entries).
+
+    Args:
+        cfg: The currently loaded application configuration dictionary.
+
+    Returns:
+        dict[str, Any]: Status dict with keys:
+            - is_first_run: bool
+            - path_migrated: bool
+            - previous_path: str
+            - current_path: str
+            - autostart_synced: bool
+    """
+    current_exec = get_current_executable_path()
+    last_known = str(cfg.get("last_known_exe_path", "")).strip()
+
+    is_first_run = not bool(last_known)
+    path_migrated = False
+
+    if not is_first_run:
+        # Check case-insensitive and normalized paths for Windows compatibility
+        if os.path.normcase(os.path.normpath(last_known)) != os.path.normcase(os.path.normpath(current_exec)):
+            path_migrated = True
+
+    # Also inspect existing autostart target in VBS
+    existing_autostart_target = get_autostart_target()
+    if existing_autostart_target and os.path.normcase(os.path.normpath(existing_autostart_target)) != os.path.normcase(
+        os.path.normpath(current_exec)
+    ):
+        path_migrated = True
+
+    autostart_desired = bool(cfg.get("autostart", True))
+    autostart_synced = False
+
+    # 1. On first run or if autostart is active/desired, ensure autostart points to current executable
+    if is_first_run or path_migrated:
+        if autostart_desired or check_autostart():
+            toggle_autostart(True, current_exec)
+            autostart_synced = True
+            cfg["autostart"] = True
+
+        # Update start menu shortcut on Windows
+        if sys.platform == "win32":
+            create_or_update_start_menu_shortcut(current_exec)
+
+    elif autostart_desired and not check_autostart():
+        # Autostart is desired according to config, but file is missing
+        toggle_autostart(True, current_exec)
+        autostart_synced = True
+
+    # Update and persist last known executable path if it changed
+    if cfg.get("last_known_exe_path") != current_exec or is_first_run:
+        cfg["last_known_exe_path"] = current_exec
+        save_config(cfg)
+
+    return {
+        "is_first_run": is_first_run,
+        "path_migrated": path_migrated,
+        "previous_path": last_known,
+        "current_path": current_exec,
+        "autostart_synced": autostart_synced,
+    }
 
 
 def detect_displays() -> list[dict[str, Any]]:

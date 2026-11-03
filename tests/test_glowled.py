@@ -169,6 +169,106 @@ def test_autostart_helpers(monkeypatch):
         assert config.check_autostart() is False
 
 
+def test_get_current_executable_path(monkeypatch):
+    # Non-frozen mode
+    monkeypatch.setattr(config.sys, "frozen", False, raising=False)
+    monkeypatch.setattr(config.sys, "argv", ["/custom/path/main.py"])
+    assert config.get_current_executable_path() == os.path.abspath("/custom/path/main.py")
+
+    # Frozen mode (PyInstaller)
+    monkeypatch.setattr(config.sys, "frozen", True, raising=False)
+    monkeypatch.setattr(config.sys, "executable", "/portable/bin/GloWled.exe")
+    assert config.get_current_executable_path() == os.path.abspath("/portable/bin/GloWled.exe")
+
+
+def test_get_autostart_target(monkeypatch):
+    with tempfile.TemporaryDirectory() as tmpdir:
+        fake_vbs = os.path.join(tmpdir, "GloWled.vbs")
+        monkeypatch.setattr(config, "get_autostart_path", lambda: fake_vbs)
+
+        assert config.get_autostart_target() is None
+
+        # Format 1: Frozen with --autostart
+        with open(fake_vbs, "w", encoding="utf-8") as f:
+            f.write('CreateObject("Wscript.Shell").Run """C:\\Apps\\GloWled.exe"" --autostart", 0, False\n')
+        assert config.get_autostart_target() == "C:\\Apps\\GloWled.exe"
+
+        # Format 2: Legacy without --autostart
+        with open(fake_vbs, "w", encoding="utf-8") as f:
+            f.write('CreateObject("Wscript.Shell").Run """C:\\OldDir\\GloWled.exe""", 0, False\n')
+        assert config.get_autostart_target() == "C:\\OldDir\\GloWled.exe"
+
+
+def test_sync_portable_environment_first_run(monkeypatch):
+    with tempfile.TemporaryDirectory() as tmpdir:
+        fake_vbs = os.path.join(tmpdir, "GloWled.vbs")
+        fake_cfg_file = os.path.join(tmpdir, "config.json")
+        monkeypatch.setattr(config, "get_autostart_path", lambda: fake_vbs)
+        monkeypatch.setattr(config, "get_config_file_path", lambda: fake_cfg_file)
+        monkeypatch.setattr(config, "get_app_data_dir", lambda: tmpdir)
+        monkeypatch.setattr(config, "get_current_executable_path", lambda: "/portable/GloWled.exe")
+
+        cfg = config.DEFAULT_CONFIG.copy()
+        cfg["last_known_exe_path"] = ""
+        cfg["autostart"] = True
+
+        status = config.sync_portable_environment(cfg)
+        assert status["is_first_run"] is True
+        assert status["path_migrated"] is False
+        assert status["autostart_synced"] is True
+        assert cfg["last_known_exe_path"] == "/portable/GloWled.exe"
+        assert os.path.exists(fake_vbs)
+        assert os.path.exists(fake_cfg_file)
+
+
+def test_sync_portable_environment_exe_moved(monkeypatch):
+    with tempfile.TemporaryDirectory() as tmpdir:
+        fake_vbs = os.path.join(tmpdir, "GloWled.vbs")
+        fake_cfg_file = os.path.join(tmpdir, "config.json")
+        monkeypatch.setattr(config, "get_autostart_path", lambda: fake_vbs)
+        monkeypatch.setattr(config, "get_config_file_path", lambda: fake_cfg_file)
+        monkeypatch.setattr(config, "get_app_data_dir", lambda: tmpdir)
+
+        # Simulate initial run at /old/path/GloWled.exe
+        monkeypatch.setattr(config, "get_current_executable_path", lambda: "/old/path/GloWled.exe")
+        cfg = config.DEFAULT_CONFIG.copy()
+        config.sync_portable_environment(cfg)
+        assert cfg["last_known_exe_path"] == "/old/path/GloWled.exe"
+
+        # Now simulate moving GloWled.exe to /new/location/GloWled.exe
+        monkeypatch.setattr(config, "get_current_executable_path", lambda: "/new/location/GloWled.exe")
+        status = config.sync_portable_environment(cfg)
+        assert status["is_first_run"] is False
+        assert status["path_migrated"] is True
+        assert status["autostart_synced"] is True
+        assert cfg["last_known_exe_path"] == "/new/location/GloWled.exe"
+
+        # Check that VBScript was updated to the new path
+        with open(fake_vbs, encoding="utf-8") as f:
+            vbs_content = f.read()
+        assert "/new/location/GloWled.exe" in vbs_content
+
+
+def test_sync_portable_environment_autostart_disabled_by_user(monkeypatch):
+    with tempfile.TemporaryDirectory() as tmpdir:
+        fake_vbs = os.path.join(tmpdir, "GloWled.vbs")
+        fake_cfg_file = os.path.join(tmpdir, "config.json")
+        monkeypatch.setattr(config, "get_autostart_path", lambda: fake_vbs)
+        monkeypatch.setattr(config, "get_config_file_path", lambda: fake_cfg_file)
+        monkeypatch.setattr(config, "get_app_data_dir", lambda: tmpdir)
+        monkeypatch.setattr(config, "get_current_executable_path", lambda: "/portable/GloWled.exe")
+
+        cfg = config.DEFAULT_CONFIG.copy()
+        cfg["last_known_exe_path"] = "/portable/GloWled.exe"
+        cfg["autostart"] = False
+
+        status = config.sync_portable_environment(cfg)
+        assert status["is_first_run"] is False
+        assert status["path_migrated"] is False
+        assert status["autostart_synced"] is False
+        assert not os.path.exists(fake_vbs)
+
+
 # =========================================================================
 # Feature A: Adaptive Erfassungsauflösung Tests
 # =========================================================================
