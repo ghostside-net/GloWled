@@ -1,12 +1,15 @@
 # Byte-compiled / optimized / DLL files
+# C extensions
+# Distribution / packaging
+# PyInstaller
+# Virtual Environments
+# IDE & Editors
+# Testing & Coverage
+# Local logs & environment
 __pycache__/
 *.py[cod]
 *$py.class
-
-# C extensions
 *.so
-
-# Distribution / packaging
 build/
 dist/
 downloads/
@@ -23,56 +26,20 @@ share/python-wheels/
 .installed.cfg
 *.egg
 MANIFEST
-
-# PyInstaller
 *.manifest
 *.spec
-
-# Virtual Environments
 .venv/
 venv/
 ENV/
 env/
-
-# IDE & Editors
 .idea/
 .vscode/
 *.swp
 *.swo
 *~
-
-# Testing & Coverage
 .pytest_cache/
 .mypy_cache/
 .coverage
 htmlcov/
-
-# Local logs & environment
 *.log
 .env
-
-# >>> agent-orchestrator-guard >>>
-# Auto-managed by Agent Orchestrator — prevents internal artifact & prompt leakage
-skills.md
-SKILLS.md
-skill.md
-SKILL.md
-.orchestrator*
-.orchestrator/
-orchestrator_logs/
-*.prompt
-.current_task_prompt.md
-.env
-.env.*
-!.env.example
-!.env.sample
-!.env.template
-build_error.log
-*.tmp
-*.temp
-*.bak
-*.swp
-*~
-__pycache__/
-.pytest_cache/
-# <<< agent-orchestrator-guard <<<

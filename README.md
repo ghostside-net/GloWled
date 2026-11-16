@@ -120,10 +120,7 @@ GloWled communicates using WLED's ultra-low-latency realtime **UDP (DRGB)** prot
 If you want a portable single `.exe` file that runs without a Python installation:
 
 ```bash
-# Option 1: Run the automated build script on Windows
-build_exe.bat
-
-# Option 2: Run PyInstaller directly
+# Run PyInstaller directly
 pip install pyinstaller
 pyinstaller --noconsole --onefile --icon=icon.ico --add-data "icon.ico;." --name=GloWled main.py
 ```
