@@ -8,13 +8,15 @@ use std::time::{Duration, Instant};
 use glowled::capture::{enumerate_displays, DisplayInfo, FrameBuffer, PixelFormat};
 use glowled::config::{
     get_config_file_path, get_current_executable_path, is_autostart_enabled, load_config,
-    save_config, set_autostart, AppConfig, StartCorner, WledProtocol,
+    save_config, set_autostart, AppConfig, MonitorConfig, StartCorner, WledProtocol,
 };
 use glowled::error::{GlowledError, Result};
-use glowled::processing::{process_monitor_frame_into, ProcessingScratch, TemporalSmoother};
+use glowled::processing::{
+    process_monitor_frame_with_sampling_into, ProcessingScratch, TemporalSmoother,
+};
 use glowled::tray::{TrayAction, TrayManager};
 use glowled::wled::{build_wled_packet_into, test_wled_connection, WorkerEvent, WorkerHandle};
-use slint::{Color, ModelRc, SharedString, Timer, TimerMode, VecModel};
+use slint::{Color, Model, ModelRc, SharedString, Timer, TimerMode, VecModel};
 
 slint::include_modules!();
 
@@ -234,7 +236,7 @@ fn run_benchmark_mode() {
             &mut thumb,
         );
         rgb_out.clear();
-        process_monitor_frame_into(
+        process_monitor_frame_with_sampling_into(
             &thumb,
             mon,
             &cfg.resolution,
@@ -242,7 +244,7 @@ fn run_benchmark_mode() {
             cfg.saturation,
             cfg.white_balance,
             cfg.gamma,
-            cfg.edge_depth,
+            &cfg.edge_sampling,
             cfg.black_threshold,
             cfg.black_bar_detection,
             cfg.oversample_factor,
@@ -281,16 +283,73 @@ fn run_benchmark_mode() {
     }
 }
 
-fn build_monitor_models(displays: &[DisplayInfo]) -> ModelRc<SharedString> {
-    let items: Vec<SharedString> = displays
+fn display_title(mss_index: usize, displays: &[DisplayInfo]) -> SharedString {
+    if let Some(d) = displays.iter().find(|d| d.index == mss_index) {
+        SharedString::from(format!("{} ({}×{})", d.name, d.width, d.height))
+    } else {
+        SharedString::from(format!("Monitor {mss_index} (nicht erkannt)"))
+    }
+}
+
+fn to_configured_item(mon: &MonitorConfig, displays: &[DisplayInfo]) -> ConfiguredMonitorItem {
+    let (corner, clockwise) = mon
+        .infer_corner_and_clockwise()
+        .unwrap_or((mon.start_corner, mon.clockwise));
+    ConfiguredMonitorItem {
+        mss_index: mon.mss_index as i32,
+        title: display_title(mon.mss_index, displays),
+        leds_top: mon.leds_top as i32,
+        leds_bottom: mon.leds_bottom as i32,
+        leds_left: mon.leds_left as i32,
+        leds_right: mon.leds_right as i32,
+        start_corner_index: corner.to_index(),
+        clockwise,
+    }
+}
+
+fn total_leds_across(monitors: &[MonitorConfig]) -> i32 {
+    monitors.iter().map(|m| m.total_leds() as i32).sum()
+}
+
+fn sync_detected_monitors_model(
+    ui: &SettingsWindow,
+    monitors: &[MonitorConfig],
+    displays: &[DisplayInfo],
+) {
+    let detected: Vec<DetectedMonitorItem> = displays
         .iter()
-        .map(|d| SharedString::from(format!("{} ({}x{})", d.name, d.width, d.height)))
+        .map(|d| DetectedMonitorItem {
+            mss_index: d.index as i32,
+            label: SharedString::from(d.name.as_str()),
+            resolution: SharedString::from(format!("{}×{}", d.width, d.height)),
+            is_added: monitors.iter().any(|m| m.mss_index == d.index),
+        })
         .collect();
-    ModelRc::new(VecModel::from(items))
+    ui.set_detected_monitors(ModelRc::new(VecModel::from(detected)));
+}
+
+fn sync_all_monitor_models(
+    ui: &SettingsWindow,
+    configured_model: &Rc<VecModel<ConfiguredMonitorItem>>,
+    monitors: &[MonitorConfig],
+    displays: &[DisplayInfo],
+) {
+    sync_detected_monitors_model(ui, monitors, displays);
+    let items: Vec<ConfiguredMonitorItem> = monitors
+        .iter()
+        .map(|m| to_configured_item(m, displays))
+        .collect();
+    configured_model.set_vec(items);
+    ui.set_total_leds_all_monitors(total_leds_across(monitors));
+}
+
+fn ratio_to_pct(val: f32, min_pct: f32, max_pct: f32) -> i32 {
+    (val * 100.0).round().clamp(min_pct, max_pct) as i32
 }
 
 fn populate_ui_from_config(
     ui: &SettingsWindow,
+    configured_model: &Rc<VecModel<ConfiguredMonitorItem>>,
     cfg: &AppConfig,
     displays: &[DisplayInfo],
     active: bool,
@@ -299,13 +358,7 @@ fn populate_ui_from_config(
     ui.set_wled_port(SharedString::from(cfg.port.to_string()));
     ui.set_protocol_index(cfg.protocol.to_index());
 
-    let mon = cfg.monitors.first().cloned().unwrap_or_default();
-    ui.set_leds_top(mon.leds_top as i32);
-    ui.set_leds_bottom(mon.leds_bottom as i32);
-    ui.set_leds_left(mon.leds_left as i32);
-    ui.set_leds_right(mon.leds_right as i32);
-    ui.set_start_corner_index(mon.start_corner.to_index());
-    ui.set_clockwise(mon.clockwise);
+    sync_all_monitor_models(ui, configured_model, &cfg.monitors, displays);
 
     ui.set_fps_limit(cfg.fps as i32);
     ui.set_gamma(cfg.gamma);
@@ -313,16 +366,17 @@ fn populate_ui_from_config(
     ui.set_saturation(cfg.saturation);
     ui.set_smoothing_pct((cfg.smoothing * 100.0).round() as i32);
     ui.set_black_threshold(cfg.black_threshold.round() as i32);
-    ui.set_edge_depth_pct((cfg.edge_depth * 100.0).round().clamp(2.0, 50.0) as i32);
     ui.set_black_bar_detection(cfg.black_bar_detection);
     ui.set_resolution_index(resolution_to_index(&cfg.resolution));
 
-    ui.set_monitor_models(build_monitor_models(displays));
-    let sel_idx = displays
-        .iter()
-        .position(|d| d.index == mon.mss_index)
-        .unwrap_or(0) as i32;
-    ui.set_selected_monitor_index(sel_idx);
+    ui.set_edge_top_depth_pct(ratio_to_pct(cfg.edge_sampling.top.depth, 1.0, 50.0));
+    ui.set_edge_top_offset_pct(ratio_to_pct(cfg.edge_sampling.top.offset, 0.0, 50.0));
+    ui.set_edge_bottom_depth_pct(ratio_to_pct(cfg.edge_sampling.bottom.depth, 1.0, 50.0));
+    ui.set_edge_bottom_offset_pct(ratio_to_pct(cfg.edge_sampling.bottom.offset, 0.0, 50.0));
+    ui.set_edge_left_depth_pct(ratio_to_pct(cfg.edge_sampling.left.depth, 1.0, 50.0));
+    ui.set_edge_left_offset_pct(ratio_to_pct(cfg.edge_sampling.left.offset, 0.0, 50.0));
+    ui.set_edge_right_depth_pct(ratio_to_pct(cfg.edge_sampling.right.depth, 1.0, 50.0));
+    ui.set_edge_right_offset_pct(ratio_to_pct(cfg.edge_sampling.right.offset, 0.0, 50.0));
 
     ui.set_ambilight_active(active);
     ui.set_eco_mode(cfg.eco_mode);
@@ -338,7 +392,7 @@ fn populate_ui_from_config(
 fn read_config_from_ui(
     ui: &SettingsWindow,
     current_cfg: &AppConfig,
-    displays: &[DisplayInfo],
+    working_monitors: &[MonitorConfig],
 ) -> AppConfig {
     let mut cfg = current_cfg.clone();
 
@@ -359,7 +413,21 @@ fn read_config_from_ui(
     cfg.saturation = ui.get_saturation().clamp(0.0, 3.0);
     cfg.smoothing = (ui.get_smoothing_pct() as f32 / 100.0).clamp(0.0, 0.95);
     cfg.black_threshold = (ui.get_black_threshold() as f32).clamp(0.0, 255.0);
-    cfg.edge_depth = (ui.get_edge_depth_pct() as f32 / 100.0).clamp(0.01, 0.50);
+
+    cfg.edge_sampling.top.depth = (ui.get_edge_top_depth_pct() as f32 / 100.0).clamp(0.01, 0.50);
+    cfg.edge_sampling.top.offset = (ui.get_edge_top_offset_pct() as f32 / 100.0).clamp(0.0, 0.50);
+    cfg.edge_sampling.bottom.depth =
+        (ui.get_edge_bottom_depth_pct() as f32 / 100.0).clamp(0.01, 0.50);
+    cfg.edge_sampling.bottom.offset =
+        (ui.get_edge_bottom_offset_pct() as f32 / 100.0).clamp(0.0, 0.50);
+    cfg.edge_sampling.left.depth = (ui.get_edge_left_depth_pct() as f32 / 100.0).clamp(0.01, 0.50);
+    cfg.edge_sampling.left.offset = (ui.get_edge_left_offset_pct() as f32 / 100.0).clamp(0.0, 0.50);
+    cfg.edge_sampling.right.depth =
+        (ui.get_edge_right_depth_pct() as f32 / 100.0).clamp(0.01, 0.50);
+    cfg.edge_sampling.right.offset =
+        (ui.get_edge_right_offset_pct() as f32 / 100.0).clamp(0.0, 0.50);
+    cfg.edge_depth = cfg.edge_sampling.top.depth;
+
     cfg.black_bar_detection = ui.get_black_bar_detection();
     cfg.resolution = index_to_resolution(ui.get_resolution_index()).to_string();
     cfg.eco_mode = ui.get_eco_mode();
@@ -367,24 +435,11 @@ fn read_config_from_ui(
     cfg.start_minimized = ui.get_start_minimized();
     cfg.last_known_exe_path = get_current_executable_path();
 
-    let sel_mon = ui.get_selected_monitor_index().max(0) as usize;
-    let mss_index = displays.get(sel_mon).map(|d| d.index).unwrap_or(1);
-
-    let mut mon = cfg.monitors.first().cloned().unwrap_or_default();
-    mon.mss_index = mss_index;
-    mon.leds_top = ui.get_leds_top().max(0) as usize;
-    mon.leds_bottom = ui.get_leds_bottom().max(0) as usize;
-    mon.leds_left = ui.get_leds_left().max(0) as usize;
-    mon.leds_right = ui.get_leds_right().max(0) as usize;
-    mon.start_corner = StartCorner::from_index(ui.get_start_corner_index());
-    mon.clockwise = ui.get_clockwise();
-    mon.sync_geometry_from_corner_and_direction();
-
-    if cfg.monitors.is_empty() {
-        cfg.monitors.push(mon);
+    cfg.monitors = if working_monitors.is_empty() {
+        vec![MonitorConfig::default()]
     } else {
-        cfg.monitors[0] = mon;
-    }
+        working_monitors.to_vec()
+    };
 
     cfg.sanitize();
     cfg
@@ -447,6 +502,10 @@ fn run() -> Result<()> {
     let ui = SettingsWindow::new()
         .map_err(|e| GlowledError::Ui(format!("SettingsWindow Initialisierung: {e}")))?;
     let displays = Rc::new(RefCell::new(enumerate_displays()));
+    let working_monitors = Rc::new(RefCell::new(cfg.monitors.clone()));
+    let configured_model = Rc::new(VecModel::<ConfiguredMonitorItem>::default());
+    ui.set_configured_monitors(ModelRc::from(configured_model.clone()));
+
     let cfg_state = Rc::new(RefCell::new(cfg.clone()));
     let active_state = Rc::new(Cell::new(true));
     let ui_visible = Rc::new(Cell::new(!start_minimized));
@@ -462,7 +521,7 @@ fn run() -> Result<()> {
         }
     };
 
-    populate_ui_from_config(&ui, &cfg, &displays.borrow(), true);
+    populate_ui_from_config(&ui, &configured_model, &cfg, &displays.borrow(), true);
     if !get_config_file_path().exists() {
         let _ = save_config(&cfg);
     }
@@ -524,15 +583,146 @@ fn run() -> Result<()> {
     {
         let ui_weak = ui.as_weak();
         let displays_ref = displays.clone();
+        let mons_ref = working_monitors.clone();
+        let model_ref = configured_model.clone();
         ui.on_detect_monitors(move || {
             let new_displays = enumerate_displays();
             *displays_ref.borrow_mut() = new_displays.clone();
             if let Some(win) = ui_weak.upgrade() {
-                win.set_monitor_models(build_monitor_models(&new_displays));
+                sync_all_monitor_models(&win, &model_ref, &mons_ref.borrow(), &new_displays);
                 win.set_live_status_text(SharedString::from(format!(
                     "{} Monitor(e) erkannt",
                     new_displays.len()
                 )));
+            }
+        });
+    }
+
+    // Add monitor callback
+    {
+        let ui_weak = ui.as_weak();
+        let displays_ref = displays.clone();
+        let mons_ref = working_monitors.clone();
+        let model_ref = configured_model.clone();
+        ui.on_add_monitor(move |mss_idx| {
+            let idx = (mss_idx.max(1)) as usize;
+            let mut mons = mons_ref.borrow_mut();
+            if !mons.iter().any(|m| m.mss_index == idx) {
+                let mut new_mon = MonitorConfig {
+                    mss_index: idx,
+                    ..Default::default()
+                };
+                new_mon.sync_geometry_from_corner_and_direction();
+                mons.push(new_mon);
+            }
+            if let Some(win) = ui_weak.upgrade() {
+                sync_all_monitor_models(&win, &model_ref, &mons, &displays_ref.borrow());
+                win.set_live_status_text(SharedString::from(format!(
+                    "Monitor {idx} eingebunden (noch nicht gespeichert)"
+                )));
+            }
+        });
+    }
+
+    // Remove monitor callback
+    {
+        let ui_weak = ui.as_weak();
+        let displays_ref = displays.clone();
+        let mons_ref = working_monitors.clone();
+        let model_ref = configured_model.clone();
+        ui.on_remove_monitor(move |card_idx| {
+            let idx = card_idx.max(0) as usize;
+            let mut mons = mons_ref.borrow_mut();
+            if mons.len() > 1 && idx < mons.len() {
+                let removed = mons.remove(idx);
+                if let Some(win) = ui_weak.upgrade() {
+                    sync_all_monitor_models(&win, &model_ref, &mons, &displays_ref.borrow());
+                    win.set_live_status_text(SharedString::from(format!(
+                        "Monitor {} entfernt (noch nicht gespeichert)",
+                        removed.mss_index
+                    )));
+                }
+            }
+        });
+    }
+
+    // Move monitor order callback
+    {
+        let ui_weak = ui.as_weak();
+        let displays_ref = displays.clone();
+        let mons_ref = working_monitors.clone();
+        let model_ref = configured_model.clone();
+        ui.on_move_monitor(move |card_idx, delta| {
+            let idx = card_idx.max(0) as usize;
+            let mut mons = mons_ref.borrow_mut();
+            let target_isize = (idx as isize) + (delta as isize);
+            if idx < mons.len() && target_isize >= 0 && (target_isize as usize) < mons.len() {
+                let target = target_isize as usize;
+                mons.swap(idx, target);
+                if let Some(win) = ui_weak.upgrade() {
+                    sync_all_monitor_models(&win, &model_ref, &mons, &displays_ref.borrow());
+                }
+            }
+        });
+    }
+
+    // Update monitor LED counts callback (edge_idx: 0=top, 1=bottom, 2=left, 3=right)
+    {
+        let ui_weak = ui.as_weak();
+        let displays_ref = displays.clone();
+        let mons_ref = working_monitors.clone();
+        let model_ref = configured_model.clone();
+        ui.on_update_monitor_leds(move |card_idx, edge_idx, val| {
+            let idx = card_idx.max(0) as usize;
+            let clamped = val.clamp(0, 500) as usize;
+            let mut mons = mons_ref.borrow_mut();
+            if let Some(mon) = mons.get_mut(idx) {
+                match edge_idx {
+                    0 => mon.leds_top = clamped,
+                    1 => mon.leds_bottom = clamped,
+                    2 => mon.leds_left = clamped,
+                    3 => mon.leds_right = clamped,
+                    _ => return,
+                }
+                let item = to_configured_item(mon, &displays_ref.borrow());
+                model_ref.set_row_data(idx, item);
+                if let Some(win) = ui_weak.upgrade() {
+                    win.set_total_leds_all_monitors(total_leds_across(&mons));
+                }
+            }
+        });
+    }
+
+    // Update monitor start corner callback
+    {
+        let displays_ref = displays.clone();
+        let mons_ref = working_monitors.clone();
+        let model_ref = configured_model.clone();
+        ui.on_update_monitor_corner(move |card_idx, corner_idx| {
+            let idx = card_idx.max(0) as usize;
+            let mut mons = mons_ref.borrow_mut();
+            if let Some(mon) = mons.get_mut(idx) {
+                mon.start_corner = StartCorner::from_index(corner_idx);
+                mon.sync_geometry_from_corner_and_direction();
+                let item = to_configured_item(mon, &displays_ref.borrow());
+                model_ref.set_row_data(idx, item);
+            }
+        });
+    }
+
+    // Update monitor clockwise direction callback
+    {
+        let displays_ref = displays.clone();
+        let mons_ref = working_monitors.clone();
+        let model_ref = configured_model.clone();
+        ui.on_update_monitor_clockwise(move |card_idx, cw| {
+            let idx = card_idx.max(0) as usize;
+            let mut mons = mons_ref.borrow_mut();
+            if let Some(mon) = mons.get_mut(idx) {
+                mon.clockwise = cw;
+                mon.sync_geometry_from_corner_and_direction();
+                let item = to_configured_item(mon, &displays_ref.borrow());
+                model_ref.set_row_data(idx, item);
             }
         });
     }
@@ -587,16 +777,17 @@ fn run() -> Result<()> {
     {
         let ui_weak = ui.as_weak();
         let cfg_ref = cfg_state.clone();
-        let displays_ref = displays.clone();
+        let mons_ref = working_monitors.clone();
         let worker_ref = worker.clone();
         ui.on_apply_settings(move || {
             let Some(win) = ui_weak.upgrade() else { return };
-            let new_cfg = read_config_from_ui(&win, &cfg_ref.borrow(), &displays_ref.borrow());
+            let new_cfg = read_config_from_ui(&win, &cfg_ref.borrow(), &mons_ref.borrow());
             *cfg_ref.borrow_mut() = new_cfg.clone();
             worker_ref.borrow().update_config(new_cfg.clone());
             match save_config(&new_cfg) {
                 Ok(()) => win.set_live_status_text(SharedString::from(format!(
-                    "Gespeichert • Ziel {}:{} ({})",
+                    "Gespeichert • {} Monitor(e) • Ziel {}:{} ({})",
+                    new_cfg.monitors.len(),
                     new_cfg.ip,
                     new_cfg.port,
                     new_cfg.protocol.as_str()
@@ -660,12 +851,22 @@ fn run() -> Result<()> {
                     continue;
                 };
                 match ev {
-                    WorkerEvent::PreviewColors(colors) => {
-                        let slint_colors: Vec<Color> = colors
+                    WorkerEvent::PreviewColors(monitor_previews) => {
+                        let items: Vec<PreviewMonitorItem> = monitor_previews
                             .into_iter()
-                            .map(|[r, g, b]| Color::from_rgb_u8(r, g, b))
+                            .map(|mp| {
+                                let slint_colors: Vec<Color> = mp
+                                    .colors
+                                    .into_iter()
+                                    .map(|[r, g, b]| Color::from_rgb_u8(r, g, b))
+                                    .collect();
+                                PreviewMonitorItem {
+                                    label: SharedString::from(format!("M{}", mp.mss_index)),
+                                    colors: ModelRc::new(VecModel::from(slint_colors)),
+                                }
+                            })
                             .collect();
-                        win.set_preview_colors(ModelRc::new(VecModel::from(slint_colors)));
+                        win.set_preview_monitors(ModelRc::new(VecModel::from(items)));
                     }
                     WorkerEvent::StatusUpdate { active, fps, error } => {
                         win.set_ambilight_active(active);

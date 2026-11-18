@@ -22,7 +22,7 @@
   - Automatic recovery without `panic!` on `DXGI_ERROR_ACCESS_LOST`, resolution changes, UAC prompts, monitor standby, and fullscreen games (including automatic GDI `BitBlt` fallback).
 - **Edge Processing & Color Pipeline (`src/processing.rs`):**
   - Nyquist-Shannon adaptive capture resolution (`oversample_factor`) and preset modes.
-  - Configurable edge depth (percentage or pixel distance) with overlap clamping.
+  - Configurable per-side edge sampling strips (`edge_sampling`: strip width `depth` and distance from border `offset` independently for top, bottom, left, and right).
   - **Symmetric Black-Bar Detection:** Automatically skips top/bottom letterbox and left/right pillarbox cinema bars.
   - **Color Corrections:** BGRA/RGBA alpha sanitization, HSV saturation, brightness, RGB white balance, precomputed Gamma LUT, and Hermite smoothstep black-level cutoff (`apply_black_level_threshold`).
   - **Temporal EMA Smoothing:** Exponential moving average filter with black-threshold snapping.
@@ -34,7 +34,7 @@
   - Configuration persisted at `%APPDATA%\GloWled\config.json` (backward-compatible with Python v1.x configs; `~/.glowled/config.json` on Unix).
   - Windows Autostart via Registry `HKCU\Software\Microsoft\Windows\CurrentVersion\Run`.
 - **Slint Dark-Mode Settings UI (`ui/settings.slint`):**
-  - Four structured tabs: **1. Verbindung**, **2. LED-Geometrie**, **3. Bild & Farbe**, **4. System**, plus live edge preview bar while visible.
+  - Four structured tabs: **1. Verbindung**, **2. Monitore & LEDs**, **3. Bild & Farbe**, **4. System**, plus per-monitor separated live edge preview bars while visible.
 
 ---
 
@@ -92,7 +92,8 @@ glowled --version       # Print version and exit
 | `gamma` | `f32` | `1.0` | Gamma exponent (0.5–4.0) |
 | `white_balance` | `[f32; 3]` | `[1.0, 1.0, 1.0]` | Per-channel RGB gains |
 | `smoothing` | `f32` | `0.1` | Temporal EMA factor (0.0–0.95) |
-| `edge_depth` | `f32` | `0.08` | Border sampling depth ratio (`0.02`–`0.50`) or pixels (`> 1.0`) |
+| `edge_depth` | `f32` | `0.08` | Legacy border sampling depth fallback (migrated into `edge_sampling`) |
+| `edge_sampling` | `object` | `{top,bottom,left,right}` | Per-side sampling strip `depth` (width) and `offset` (distance from border) |
 | `black_threshold` | `f32` | `15.0` | Black cutoff threshold (0–255) |
 | `black_bar_detection` | `bool` | `true` | Skip symmetric letterbox/pillarbox black bars |
 | `oversample_factor` | `f32` | `2.0` | Nyquist-Shannon adaptive oversampling factor |

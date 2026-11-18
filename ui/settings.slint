@@ -11,6 +11,29 @@ import {
     VerticalBox,
 } from "std-widgets.slint";
 
+export struct PreviewMonitorItem {
+    label: string,
+    colors: [color],
+}
+
+export struct DetectedMonitorItem {
+    mss_index: int,
+    label: string,
+    resolution: string,
+    is_added: bool,
+}
+
+export struct ConfiguredMonitorItem {
+    mss_index: int,
+    title: string,
+    leds_top: int,
+    leds_bottom: int,
+    leds_left: int,
+    leds_right: int,
+    start_corner_index: int,
+    clockwise: bool,
+}
+
 component SectionCard inherits Rectangle {
     in property <string> title;
     background: #18181b;
@@ -58,19 +81,93 @@ component TabChip inherits Rectangle {
     }
 }
 
+component EdgeStripControl inherits Rectangle {
+    in property <string> side_label;
+    in property <color> accent_color;
+    in-out property <int> depth_pct: 8;
+    in-out property <int> offset_pct: 0;
+
+    background: #27272a;
+    border-radius: 8px;
+    border-width: 1px;
+    border-color: #3f3f46;
+
+    VerticalBox {
+        padding: 10px;
+        spacing: 6px;
+
+        HorizontalBox {
+            padding: 0px;
+            spacing: 8px;
+            Rectangle {
+                width: 8px;
+                height: 8px;
+                border-radius: 4px;
+                background: root.accent_color;
+                y: 4px;
+            }
+            Text {
+                text: root.side_label;
+                color: #f4f4f5;
+                font-size: 12px;
+                font-weight: 700;
+                vertical-alignment: center;
+            }
+        }
+
+        HorizontalBox {
+            padding: 0px;
+            spacing: 8px;
+            Text {
+                text: "Streifenbreite: " + root.depth_pct + "%";
+                color: #d4d4d8;
+                font-size: 11px;
+                width: 128px;
+                vertical-alignment: center;
+            }
+            Slider {
+                minimum: 1;
+                maximum: 50;
+                value: root.depth_pct;
+                horizontal-stretch: 1;
+                changed(v) => { root.depth_pct = Math.round(v); }
+            }
+        }
+
+        HorizontalBox {
+            padding: 0px;
+            spacing: 8px;
+            Text {
+                text: "Randabstand: " + root.offset_pct + "%";
+                color: #d4d4d8;
+                font-size: 11px;
+                width: 128px;
+                vertical-alignment: center;
+            }
+            Slider {
+                minimum: 0;
+                maximum: 50;
+                value: root.offset_pct;
+                horizontal-stretch: 1;
+                changed(v) => { root.offset_pct = Math.round(v); }
+            }
+        }
+    }
+}
+
 export component SettingsWindow inherits Window {
     title: "GloWled — Ambilight Controller";
-    preferred-width: 660px;
-    preferred-height: 760px;
-    min-width: 580px;
-    min-height: 620px;
+    preferred-width: 700px;
+    preferred-height: 780px;
+    min-width: 600px;
+    min-height: 640px;
     background: #0f0f11;
 
     init => {
         Palette.color-scheme = ColorScheme.dark;
     }
 
-    // Active tab index (0: Verbindung, 1: Geometrie, 2: Bild & Farbe, 3: System)
+    // Active tab index (0: Verbindung, 1: Monitore & LEDs, 2: Bild & Farbe, 3: System)
     in-out property <int> active_tab: 0;
 
     // 1. Verbindung
@@ -80,26 +177,30 @@ export component SettingsWindow inherits Window {
     in-out property <string> connection_status: "";
     in-out property <bool> connection_ok: true;
 
-    // 2. LED-Geometrie
-    in-out property <int> leds_top: 15;
-    in-out property <int> leds_bottom: 15;
-    in-out property <int> leds_left: 9;
-    in-out property <int> leds_right: 9;
-    in-out property <int> start_corner_index: 0;
-    in-out property <bool> clockwise: true;
+    // 2. Monitore & LED-Geometrie (multi-monitor)
+    in-out property <[DetectedMonitorItem]> detected_monitors: [];
+    in-out property <[ConfiguredMonitorItem]> configured_monitors: [];
+    in-out property <int> total_leds_all_monitors: 48;
 
-    // 3. Bild & Farbe
+    // 3. Bild & Farbe (global across all monitors)
     in-out property <int> fps_limit: 60;
     in-out property <float> gamma: 1.0;
     in-out property <float> brightness: 1.0;
     in-out property <float> saturation: 1.0;
     in-out property <int> smoothing_pct: 10;
     in-out property <int> black_threshold: 15;
-    in-out property <int> edge_depth_pct: 8;
     in-out property <bool> black_bar_detection: true;
     in-out property <int> resolution_index: 0;
-    in-out property <[string]> monitor_models: ["Monitor 1 (1920x1080)"];
-    in-out property <int> selected_monitor_index: 0;
+
+    // Per-side edge strip width & distance from border (%)
+    in-out property <int> edge_top_depth_pct: 8;
+    in-out property <int> edge_top_offset_pct: 0;
+    in-out property <int> edge_bottom_depth_pct: 8;
+    in-out property <int> edge_bottom_offset_pct: 0;
+    in-out property <int> edge_left_depth_pct: 8;
+    in-out property <int> edge_left_offset_pct: 0;
+    in-out property <int> edge_right_depth_pct: 8;
+    in-out property <int> edge_right_offset_pct: 0;
 
     // 4. System & Live Status
     in-out property <bool> ambilight_active: true;
@@ -108,13 +209,19 @@ export component SettingsWindow inherits Window {
     in-out property <bool> start_minimized: true;
     in-out property <string> live_status_text: "Bereit";
     in-out property <string> status_badge_text: "AKTIV";
-    in-out property <[color]> preview_colors: [];
+    in-out property <[PreviewMonitorItem]> preview_monitors: [];
 
     // Callbacks
     callback test-connection();
     callback apply-settings();
     callback toggle-active(bool);
     callback detect-monitors();
+    callback add-monitor(int);
+    callback remove-monitor(int);
+    callback move-monitor(int, int);
+    callback update-monitor-leds(int, int, int);
+    callback update-monitor-corner(int, int);
+    callback update-monitor-clockwise(int, bool);
     callback toggle-autostart(bool);
     callback hide-to-tray();
 
@@ -165,17 +272,44 @@ export component SettingsWindow inherits Window {
             }
         }
 
-        // Live Edge Color Preview Strip (updates only when window is visible)
-        if root.preview_colors.length > 0 : Rectangle {
-            height: 12px;
-            border-radius: 6px;
-            background: #18181b;
-            clip: true;
+        // Live Edge Color Preview Strip — visibly separated per monitor
+        if root.preview_monitors.length > 0 : HorizontalLayout {
+            spacing: 10px;
 
-            HorizontalLayout {
-                for c in root.preview_colors : Rectangle {
-                    background: c;
-                    horizontal-stretch: 1;
+            for mon in root.preview_monitors : Rectangle {
+                horizontal-stretch: max(1, mon.colors.length);
+                height: 20px;
+                border-radius: 6px;
+                background: #18181b;
+                border-width: 1px;
+                border-color: #3f3f46;
+                clip: true;
+
+                HorizontalLayout {
+                    for c in mon.colors : Rectangle {
+                        background: c;
+                        horizontal-stretch: 1;
+                    }
+                }
+
+                if root.preview_monitors.length > 1 : Rectangle {
+                    x: 4px;
+                    y: 2px;
+                    width: mon-badge.preferred-width + 8px;
+                    height: 16px;
+                    border-radius: 4px;
+                    background: #09090bcc;
+                    border-width: 1px;
+                    border-color: #52525b;
+
+                    mon-badge := Text {
+                        text: mon.label;
+                        color: #f4f4f5;
+                        font-size: 9px;
+                        font-weight: 700;
+                        horizontal-alignment: center;
+                        vertical-alignment: center;
+                    }
                 }
             }
         }
@@ -192,7 +326,7 @@ export component SettingsWindow inherits Window {
                 clicked => { root.active_tab = 0; }
             }
             TabChip {
-                label: "2. LED-Geometrie";
+                label: "2. Monitore & LEDs";
                 active: root.active_tab == 1;
                 horizontal-stretch: 1;
                 clicked => { root.active_tab = 1; }
@@ -303,98 +437,249 @@ export component SettingsWindow inherits Window {
                     }
                 }
 
-                // TAB 1: LED-Geometrie
+                // TAB 1: Monitore & LED-Geometrie
                 if root.active_tab == 1 : VerticalBox {
                     padding: 0px;
                     spacing: 12px;
 
                     SectionCard {
-                        title: "LED-Anzahl pro Bildschirmkante";
-
-                        HorizontalBox {
-                            padding: 0px;
-                            spacing: 12px;
-                            Text { text: "Oben:"; color: #e4e4e7; width: 70px; vertical-alignment: center; }
-                            SpinBox { value <=> root.leds_top; minimum: 0; maximum: 500; horizontal-stretch: 1; }
-                            Text { text: "Unten:"; color: #e4e4e7; width: 70px; vertical-alignment: center; }
-                            SpinBox { value <=> root.leds_bottom; minimum: 0; maximum: 500; horizontal-stretch: 1; }
-                        }
-
-                        HorizontalBox {
-                            padding: 0px;
-                            spacing: 12px;
-                            Text { text: "Links:"; color: #e4e4e7; width: 70px; vertical-alignment: center; }
-                            SpinBox { value <=> root.leds_left; minimum: 0; maximum: 500; horizontal-stretch: 1; }
-                            Text { text: "Rechts:"; color: #e4e4e7; width: 70px; vertical-alignment: center; }
-                            SpinBox { value <=> root.leds_right; minimum: 0; maximum: 500; horizontal-stretch: 1; }
-                        }
-
-                        Text {
-                            text: "Gesamtanzahl LEDs: " + (root.leds_top + root.leds_bottom + root.leds_left + root.leds_right);
-                            color: #10b981;
-                            font-weight: 700;
-                            font-size: 13px;
-                        }
-                    }
-
-                    SectionCard {
-                        title: "Start-Ecke & Laufrichtung";
+                        title: "Erkannte System-Monitore";
 
                         HorizontalBox {
                             padding: 0px;
                             spacing: 10px;
                             Text {
-                                text: "Start-Ecke:";
-                                color: #e4e4e7;
-                                width: 140px;
+                                text: "Binden Sie beliebig viele erkannte Monitore in Ihre LED-Kette ein:";
+                                color: #a1a1aa;
+                                font-size: 12px;
                                 vertical-alignment: center;
-                            }
-                            ComboBox {
-                                model: ["Unten Links", "Oben Links", "Oben Rechts", "Unten Rechts"];
-                                current-index <=> root.start_corner_index;
                                 horizontal-stretch: 1;
-                            }
-                        }
-
-                        HorizontalBox {
-                            padding: 0px;
-                            spacing: 10px;
-                            Text {
-                                text: "Ausrichtung:";
-                                color: #e4e4e7;
-                                width: 140px;
-                                vertical-alignment: center;
-                            }
-                            CheckBox {
-                                text: root.clockwise ? "Uhrzeigersinn (CW)" : "Gegenuhrzeigersinn (CCW)";
-                                checked <=> root.clockwise;
-                            }
-                        }
-                    }
-                }
-
-                // TAB 2: Bild & Farbe
-                if root.active_tab == 2 : VerticalBox {
-                    padding: 0px;
-                    spacing: 12px;
-
-                    SectionCard {
-                        title: "Capture & Monitor";
-
-                        HorizontalBox {
-                            padding: 0px;
-                            spacing: 10px;
-                            Text { text: "Monitor:"; color: #e4e4e7; width: 130px; vertical-alignment: center; }
-                            ComboBox {
-                                model: root.monitor_models;
-                                current-index <=> root.selected_monitor_index;
-                                horizontal-stretch: 1;
+                                wrap: word-wrap;
                             }
                             Button {
                                 text: "Erkennen";
                                 clicked => { root.detect-monitors(); }
                             }
                         }
+
+                        for dm in root.detected_monitors : Rectangle {
+                            background: #27272a;
+                            border-radius: 8px;
+                            border-width: 1px;
+                            border-color: dm.is_added ? #065f46 : #3f3f46;
+
+                            HorizontalBox {
+                                padding: 8px;
+                                spacing: 10px;
+
+                                VerticalBox {
+                                    padding: 0px;
+                                    spacing: 2px;
+                                    horizontal-stretch: 1;
+                                    Text {
+                                        text: dm.label;
+                                        color: #f4f4f5;
+                                        font-size: 12px;
+                                        font-weight: 700;
+                                    }
+                                    Text {
+                                        text: "Auflösung: " + dm.resolution + " • Index " + dm.mss_index;
+                                        color: #a1a1aa;
+                                        font-size: 11px;
+                                    }
+                                }
+
+                                if dm.is_added : Rectangle {
+                                    height: 28px;
+                                    min-width: 106px;
+                                    border-radius: 6px;
+                                    background: #064e3b;
+                                    border-width: 1px;
+                                    border-color: #10b981;
+
+                                    Text {
+                                        text: "✓ Eingebunden";
+                                        color: #34d399;
+                                        font-size: 11px;
+                                        font-weight: 700;
+                                        horizontal-alignment: center;
+                                        vertical-alignment: center;
+                                    }
+                                }
+
+                                if !dm.is_added : Button {
+                                    text: "+ Einbinden";
+                                    primary: true;
+                                    clicked => { root.add-monitor(dm.mss_index); }
+                                }
+                            }
+                        }
+                    }
+
+                    for mon[idx] in root.configured_monitors : Rectangle {
+                        background: #18181b;
+                        border-color: #27272a;
+                        border-width: 1px;
+                        border-radius: 10px;
+
+                        VerticalBox {
+                            padding: 14px;
+                            spacing: 10px;
+
+                            HorizontalBox {
+                                padding: 0px;
+                                spacing: 8px;
+
+                                Text {
+                                    text: "#" + (idx + 1) + " • " + mon.title;
+                                    color: #f4f4f5;
+                                    font-size: 14px;
+                                    font-weight: 700;
+                                    vertical-alignment: center;
+                                    horizontal-stretch: 1;
+                                }
+
+                                Rectangle {
+                                    height: 24px;
+                                    min-width: 72px;
+                                    border-radius: 6px;
+                                    background: #064e3b;
+                                    border-width: 1px;
+                                    border-color: #10b981;
+
+                                    Text {
+                                        text: (mon.leds_top + mon.leds_bottom + mon.leds_left + mon.leds_right) + " LEDs";
+                                        color: #34d399;
+                                        font-size: 11px;
+                                        font-weight: 700;
+                                        horizontal-alignment: center;
+                                        vertical-alignment: center;
+                                    }
+                                }
+
+                                Button {
+                                    text: "↑";
+                                    enabled: idx > 0;
+                                    clicked => { root.move-monitor(idx, -1); }
+                                }
+
+                                Button {
+                                    text: "↓";
+                                    enabled: idx + 1 < root.configured_monitors.length;
+                                    clicked => { root.move-monitor(idx, 1); }
+                                }
+
+                                Button {
+                                    text: "Entfernen";
+                                    enabled: root.configured_monitors.length > 1;
+                                    clicked => { root.remove-monitor(idx); }
+                                }
+                            }
+
+                            HorizontalBox {
+                                padding: 0px;
+                                spacing: 12px;
+                                Text { text: "Oben:"; color: #e4e4e7; width: 62px; vertical-alignment: center; }
+                                SpinBox {
+                                    value: mon.leds_top;
+                                    minimum: 0;
+                                    maximum: 500;
+                                    horizontal-stretch: 1;
+                                    edited(v) => { root.update-monitor-leds(idx, 0, v); }
+                                }
+                                Text { text: "Unten:"; color: #e4e4e7; width: 62px; vertical-alignment: center; }
+                                SpinBox {
+                                    value: mon.leds_bottom;
+                                    minimum: 0;
+                                    maximum: 500;
+                                    horizontal-stretch: 1;
+                                    edited(v) => { root.update-monitor-leds(idx, 1, v); }
+                                }
+                            }
+
+                            HorizontalBox {
+                                padding: 0px;
+                                spacing: 12px;
+                                Text { text: "Links:"; color: #e4e4e7; width: 62px; vertical-alignment: center; }
+                                SpinBox {
+                                    value: mon.leds_left;
+                                    minimum: 0;
+                                    maximum: 500;
+                                    horizontal-stretch: 1;
+                                    edited(v) => { root.update-monitor-leds(idx, 2, v); }
+                                }
+                                Text { text: "Rechts:"; color: #e4e4e7; width: 62px; vertical-alignment: center; }
+                                SpinBox {
+                                    value: mon.leds_right;
+                                    minimum: 0;
+                                    maximum: 500;
+                                    horizontal-stretch: 1;
+                                    edited(v) => { root.update-monitor-leds(idx, 3, v); }
+                                }
+                            }
+
+                            HorizontalBox {
+                                padding: 0px;
+                                spacing: 10px;
+                                Text {
+                                    text: "Start-Ecke:";
+                                    color: #e4e4e7;
+                                    width: 110px;
+                                    vertical-alignment: center;
+                                }
+                                ComboBox {
+                                    model: ["Unten Links", "Oben Links", "Oben Rechts", "Unten Rechts"];
+                                    current-index: mon.start_corner_index;
+                                    horizontal-stretch: 1;
+                                    selected(_) => { root.update-monitor-corner(idx, self.current-index); }
+                                }
+                            }
+
+                            HorizontalBox {
+                                padding: 0px;
+                                spacing: 10px;
+                                Text {
+                                    text: "Ausrichtung:";
+                                    color: #e4e4e7;
+                                    width: 110px;
+                                    vertical-alignment: center;
+                                }
+                                CheckBox {
+                                    text: mon.clockwise ? "Uhrzeigersinn (CW)" : "Gegenuhrzeigersinn (CCW)";
+                                    checked: mon.clockwise;
+                                    toggled => { root.update-monitor-clockwise(idx, self.checked); }
+                                }
+                            }
+                        }
+                    }
+
+                    Rectangle {
+                        background: #18181b;
+                        border-color: #27272a;
+                        border-width: 1px;
+                        border-radius: 10px;
+                        height: 40px;
+
+                        HorizontalBox {
+                            padding: 10px;
+                            Text {
+                                text: "Eingebundene Monitore: " + root.configured_monitors.length + " • Gesamtanzahl LEDs in der Kette: " + root.total_leds_all_monitors;
+                                color: #10b981;
+                                font-size: 12px;
+                                font-weight: 700;
+                                vertical-alignment: center;
+                            }
+                        }
+                    }
+                }
+
+                // TAB 2: Bild & Farbe (generalized across all monitors)
+                if root.active_tab == 2 : VerticalBox {
+                    padding: 0px;
+                    spacing: 12px;
+
+                    SectionCard {
+                        title: "Abtastung & Bildrate (gilt für alle Monitore)";
 
                         HorizontalBox {
                             padding: 0px;
@@ -522,27 +807,114 @@ export component SettingsWindow inherits Window {
                             }
                         }
 
-                        HorizontalBox {
-                            padding: 0px;
-                            spacing: 10px;
-                            Text {
-                                text: "Randtiefe: " + root.edge_depth_pct + "%";
-                                color: #e4e4e7;
-                                width: 150px;
-                                vertical-alignment: center;
-                            }
-                            Slider {
-                                minimum: 2;
-                                maximum: 50;
-                                value: root.edge_depth_pct;
-                                horizontal-stretch: 1;
-                                changed(v) => { root.edge_depth_pct = Math.round(v); }
-                            }
-                        }
-
                         CheckBox {
                             text: "Black-Bar-Detection (schwarze Kinobalken automatisch überspringen)";
                             checked <=> root.black_bar_detection;
+                        }
+                    }
+
+                    SectionCard {
+                        title: "Abtast-Streifen pro Bildschirmseite";
+
+                        HorizontalBox {
+                            padding: 0px;
+                            spacing: 14px;
+
+                            Text {
+                                text: "Stellen Sie für jede Seite separat ein, wie breit der auszuwertende Farbstreifen ist und wie weit entfernt vom Bildschirmrand er beginnt (z. B. um Taskleisten oder HUDs auszublenden).";
+                                color: #a1a1aa;
+                                font-size: 12px;
+                                wrap: word-wrap;
+                                horizontal-stretch: 1;
+                                vertical-alignment: center;
+                            }
+
+                            // Live visual diagram of the 4 sampling strips
+                            Rectangle {
+                                width: 144px;
+                                height: 81px;
+                                background: #09090b;
+                                border-width: 1px;
+                                border-color: #52525b;
+                                border-radius: 4px;
+                                clip: true;
+
+                                // Top strip
+                                Rectangle {
+                                    x: 0px;
+                                    y: (root.edge_top_offset_pct / 100) * parent.height;
+                                    width: parent.width;
+                                    height: max(2px, min(parent.height - self.y, (root.edge_top_depth_pct / 100) * parent.height));
+                                    background: #38bdf866;
+                                    border-width: 1px;
+                                    border-color: #38bdf8;
+                                }
+
+                                // Bottom strip
+                                Rectangle {
+                                    property <length> off_b: (root.edge_bottom_offset_pct / 100) * parent.height;
+                                    property <length> h_b: max(2px, min(parent.height - off_b, (root.edge_bottom_depth_pct / 100) * parent.height));
+                                    x: 0px;
+                                    y: parent.height - off_b - h_b;
+                                    width: parent.width;
+                                    height: h_b;
+                                    background: #34d39966;
+                                    border-width: 1px;
+                                    border-color: #34d399;
+                                }
+
+                                // Left strip
+                                Rectangle {
+                                    x: (root.edge_left_offset_pct / 100) * parent.width;
+                                    y: 0px;
+                                    width: max(2px, min(parent.width - self.x, (root.edge_left_depth_pct / 100) * parent.width));
+                                    height: parent.height;
+                                    background: #f59e0b66;
+                                    border-width: 1px;
+                                    border-color: #f59e0b;
+                                }
+
+                                // Right strip
+                                Rectangle {
+                                    property <length> off_r: (root.edge_right_offset_pct / 100) * parent.width;
+                                    property <length> w_r: max(2px, min(parent.width - off_r, (root.edge_right_depth_pct / 100) * parent.width));
+                                    x: parent.width - off_r - w_r;
+                                    y: 0px;
+                                    width: w_r;
+                                    height: parent.height;
+                                    background: #c084fc66;
+                                    border-width: 1px;
+                                    border-color: #c084fc;
+                                }
+                            }
+                        }
+
+                        EdgeStripControl {
+                            side_label: "Oben";
+                            accent_color: #38bdf8;
+                            depth_pct <=> root.edge_top_depth_pct;
+                            offset_pct <=> root.edge_top_offset_pct;
+                        }
+
+                        EdgeStripControl {
+                            side_label: "Unten";
+                            accent_color: #34d399;
+                            depth_pct <=> root.edge_bottom_depth_pct;
+                            offset_pct <=> root.edge_bottom_offset_pct;
+                        }
+
+                        EdgeStripControl {
+                            side_label: "Links";
+                            accent_color: #f59e0b;
+                            depth_pct <=> root.edge_left_depth_pct;
+                            offset_pct <=> root.edge_left_offset_pct;
+                        }
+
+                        EdgeStripControl {
+                            side_label: "Rechts";
+                            accent_color: #c084fc;
+                            depth_pct <=> root.edge_right_depth_pct;
+                            offset_pct <=> root.edge_right_offset_pct;
                         }
                     }
                 }

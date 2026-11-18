@@ -84,6 +84,95 @@ pub const EDGE_TOP: &str = "top";
 pub const EDGE_RIGHT: &str = "right";
 pub const EDGE_BOTTOM: &str = "bottom";
 
+/// Sampling strip width (`depth`) and distance from screen edge (`offset`) for one side.
+/// Values in `0.0..=1.0` are ratios of the active screen dimension; values `> 1.0` are pixels.
+#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct EdgeStripConfig {
+    /// Width/thickness of the sampled strip (`0.01..=0.50` ratio or `> 1.0` pixels).
+    pub depth: f32,
+    /// Distance inward from the screen edge where the strip begins (`0.0..=0.90` ratio or `> 1.0` pixels).
+    pub offset: f32,
+}
+
+impl Default for EdgeStripConfig {
+    fn default() -> Self {
+        Self {
+            depth: 0.08,
+            offset: 0.0,
+        }
+    }
+}
+
+impl EdgeStripConfig {
+    pub fn sanitize(&mut self, fallback_depth: f32) {
+        let fb = if fallback_depth.is_finite() && fallback_depth > 0.0 {
+            if fallback_depth <= 1.0 {
+                fallback_depth.clamp(0.01, 0.50)
+            } else {
+                fallback_depth.min(2000.0)
+            }
+        } else {
+            0.08
+        };
+
+        if !self.depth.is_finite() || self.depth < 0.0 {
+            self.depth = fb;
+        } else if self.depth <= 1.0 {
+            self.depth = self.depth.clamp(0.01, 0.50);
+        } else {
+            self.depth = self.depth.min(2000.0);
+        }
+
+        if !self.offset.is_finite() || self.offset < 0.0 {
+            self.offset = 0.0;
+        } else if self.offset <= 1.0 {
+            self.offset = self.offset.clamp(0.0, 0.90);
+        } else {
+            self.offset = self.offset.min(2000.0);
+        }
+    }
+}
+
+/// Per-side edge sampling configuration (strip width & distance from border) applied across all monitors.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct EdgeSamplingSettings {
+    pub top: EdgeStripConfig,
+    pub bottom: EdgeStripConfig,
+    pub left: EdgeStripConfig,
+    pub right: EdgeStripConfig,
+}
+
+impl EdgeSamplingSettings {
+    pub fn uniform(depth: f32) -> Self {
+        let strip = EdgeStripConfig { depth, offset: 0.0 };
+        Self {
+            top: strip,
+            bottom: strip,
+            left: strip,
+            right: strip,
+        }
+    }
+
+    pub fn for_edge(&self, edge: &str) -> EdgeStripConfig {
+        match edge {
+            EDGE_TOP => self.top,
+            EDGE_BOTTOM => self.bottom,
+            EDGE_LEFT => self.left,
+            EDGE_RIGHT => self.right,
+            _ => EdgeStripConfig::default(),
+        }
+    }
+
+    pub fn sanitize(&mut self, fallback_depth: f32) {
+        self.top.sanitize(fallback_depth);
+        self.bottom.sanitize(fallback_depth);
+        self.left.sanitize(fallback_depth);
+        self.right.sanitize(fallback_depth);
+    }
+}
+
 /// Per-monitor LED geometry and routing configuration.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
@@ -193,6 +282,31 @@ impl MonitorConfig {
             self.edge_order.iter().map(|s| s.as_str()).collect()
         }
     }
+
+    /// Attempts to match `edge_order` against one of the 8 canonical `(StartCorner, clockwise)` pairs.
+    pub fn infer_corner_and_clockwise(&self) -> Option<(StartCorner, bool)> {
+        let corners = [
+            StartCorner::BottomLeft,
+            StartCorner::TopLeft,
+            StartCorner::TopRight,
+            StartCorner::BottomRight,
+        ];
+        for corner in corners {
+            for cw in [true, false] {
+                let expected = Self::edge_order_for(corner, cw);
+                if self.edge_order.len() == 4
+                    && self
+                        .edge_order
+                        .iter()
+                        .zip(expected.iter())
+                        .all(|(a, b)| a == b)
+                {
+                    return Some((corner, cw));
+                }
+            }
+        }
+        None
+    }
 }
 
 /// Complete application configuration stored in `%APPDATA%\GloWled\config.json`.
@@ -209,6 +323,7 @@ pub struct AppConfig {
     pub white_balance: [f32; 3],
     pub smoothing: f32,
     pub edge_depth: f32,
+    pub edge_sampling: EdgeSamplingSettings,
     pub black_threshold: f32,
     pub black_bar_detection: bool,
     pub oversample_factor: f32,
@@ -233,6 +348,7 @@ impl Default for AppConfig {
             white_balance: [1.0, 1.0, 1.0],
             smoothing: 0.1,
             edge_depth: 0.08,
+            edge_sampling: EdgeSamplingSettings::default(),
             black_threshold: 15.0,
             black_bar_detection: true,
             oversample_factor: 2.0,
@@ -276,10 +392,14 @@ impl AppConfig {
         if !self.edge_depth.is_finite() || self.edge_depth < 0.0 {
             self.edge_depth = 0.08;
         }
+        self.edge_sampling.sanitize(self.edge_depth);
         self.black_threshold = clamp_finite(self.black_threshold, 0.0, 255.0, 15.0);
         self.oversample_factor = clamp_finite(self.oversample_factor, 1.0, 8.0, 2.0);
         if self.monitors.is_empty() {
             self.monitors.push(MonitorConfig::default());
+        }
+        for mon in &mut self.monitors {
+            mon.mss_index = mon.mss_index.max(1);
         }
     }
 }
@@ -330,10 +450,50 @@ pub fn load_config_from_path(path: &Path) -> AppConfig {
     let mut cfg = AppConfig::default();
     if path.exists() {
         match fs::read_to_string(path) {
-            Ok(raw) => match serde_json::from_str::<AppConfig>(&raw) {
-                Ok(mut loaded) => {
-                    loaded.sanitize();
-                    return loaded;
+            Ok(raw) => match serde_json::from_str::<serde_json::Value>(&raw) {
+                Ok(val) => {
+                    let has_edge_sampling = val.get("edge_sampling").is_some();
+                    let mon_flags: Vec<(bool, bool)> = val
+                        .get("monitors")
+                        .and_then(|m| m.as_array())
+                        .map(|arr| {
+                            arr.iter()
+                                .map(|item| {
+                                    (
+                                        item.get("start_corner").is_some(),
+                                        item.get("clockwise").is_some(),
+                                    )
+                                })
+                                .collect()
+                        })
+                        .unwrap_or_default();
+
+                    match serde_json::from_value::<AppConfig>(val) {
+                        Ok(mut loaded) => {
+                            if !has_edge_sampling {
+                                loaded.edge_sampling =
+                                    EdgeSamplingSettings::uniform(loaded.edge_depth);
+                            }
+                            for (mon, (has_corner, has_cw)) in
+                                loaded.monitors.iter_mut().zip(mon_flags)
+                            {
+                                if !has_corner && !has_cw {
+                                    if let Some((corner, cw)) = mon.infer_corner_and_clockwise() {
+                                        mon.start_corner = corner;
+                                        mon.clockwise = cw;
+                                    }
+                                }
+                            }
+                            loaded.sanitize();
+                            return loaded;
+                        }
+                        Err(err) => {
+                            eprintln!(
+                                "[Config] Failed to parse {}: {err}. Using defaults.",
+                                path.display()
+                            );
+                        }
+                    }
                 }
                 Err(err) => {
                     eprintln!(
@@ -621,5 +781,120 @@ mod tests {
             format_autostart_command(r"C:\Program Files\GloWled\glowled.exe"),
             r#""C:\Program Files\GloWled\glowled.exe" --autostart"#
         );
+    }
+
+    #[test]
+    fn legacy_edge_depth_migrates_to_edge_sampling_and_multi_monitor_roundtrips() {
+        let dir = std::env::temp_dir().join(format!(
+            "glowled_multi_cfg_test_{}_{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        let cfg_path = dir.join("config.json");
+        fs::create_dir_all(&dir).unwrap();
+
+        let legacy_multi = r#"{
+            "ip": "10.0.0.10",
+            "edge_depth": 0.14,
+            "monitors": [
+                {
+                    "mss_index": 1,
+                    "leds_left": 10,
+                    "leds_top": 20,
+                    "leds_right": 10,
+                    "leds_bottom": 20,
+                    "edge_order": ["top", "right", "bottom", "left"]
+                },
+                {
+                    "mss_index": 2,
+                    "leds_left": 8,
+                    "leds_top": 12,
+                    "leds_right": 8,
+                    "leds_bottom": 12,
+                    "edge_order": ["right", "top", "left", "bottom"]
+                }
+            ]
+        }"#;
+        fs::write(&cfg_path, legacy_multi).unwrap();
+
+        let loaded = load_config_from_path(&cfg_path);
+        assert!((loaded.edge_sampling.top.depth - 0.14).abs() < 1e-5);
+        assert!((loaded.edge_sampling.bottom.depth - 0.14).abs() < 1e-5);
+        assert!((loaded.edge_sampling.left.depth - 0.14).abs() < 1e-5);
+        assert!((loaded.edge_sampling.right.depth - 0.14).abs() < 1e-5);
+        assert_eq!(loaded.edge_sampling.top.offset, 0.0);
+
+        assert_eq!(loaded.monitors.len(), 2);
+        assert_eq!(loaded.monitors[0].mss_index, 1);
+        assert_eq!(loaded.monitors[0].start_corner, StartCorner::TopLeft);
+        assert!(loaded.monitors[0].clockwise);
+        assert_eq!(loaded.monitors[1].mss_index, 2);
+        assert_eq!(loaded.monitors[1].start_corner, StartCorner::BottomRight);
+        assert!(!loaded.monitors[1].clockwise);
+
+        // Save custom per-side sampling & reload
+        let mut modified = loaded;
+        modified.edge_sampling.top = EdgeStripConfig {
+            depth: 0.12,
+            offset: 0.03,
+        };
+        modified.edge_sampling.bottom = EdgeStripConfig {
+            depth: 0.10,
+            offset: 0.08,
+        };
+        modified.edge_sampling.left = EdgeStripConfig {
+            depth: 0.06,
+            offset: 0.02,
+        };
+        modified.edge_sampling.right = EdgeStripConfig {
+            depth: 0.15,
+            offset: 0.05,
+        };
+        save_config_to_path(&modified, &cfg_path).unwrap();
+
+        let reloaded = load_config_from_path(&cfg_path);
+        assert_eq!(reloaded.edge_sampling, modified.edge_sampling);
+        assert_eq!(reloaded.monitors.len(), 2);
+        assert_eq!(reloaded.monitors[1].total_leds(), 40);
+
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn edge_sampling_sanitization_clamps_extremes() {
+        let mut cfg = AppConfig {
+            edge_depth: 0.10,
+            edge_sampling: EdgeSamplingSettings {
+                top: EdgeStripConfig {
+                    depth: f32::NAN,
+                    offset: -0.5,
+                },
+                bottom: EdgeStripConfig {
+                    depth: 0.90,
+                    offset: 0.99,
+                },
+                left: EdgeStripConfig {
+                    depth: 0.001,
+                    offset: f32::INFINITY,
+                },
+                right: EdgeStripConfig {
+                    depth: 0.25,
+                    offset: 0.20,
+                },
+            },
+            ..Default::default()
+        };
+        cfg.sanitize();
+        assert!((cfg.edge_sampling.top.depth - 0.10).abs() < 1e-5);
+        assert_eq!(cfg.edge_sampling.top.offset, 0.0);
+        assert!((cfg.edge_sampling.bottom.depth - 0.50).abs() < 1e-5);
+        assert!((cfg.edge_sampling.bottom.offset - 0.90).abs() < 1e-5);
+        assert!((cfg.edge_sampling.left.depth - 0.01).abs() < 1e-5);
+        assert_eq!(cfg.edge_sampling.left.offset, 0.0);
+        assert!((cfg.edge_sampling.right.depth - 0.25).abs() < 1e-5);
+        assert!((cfg.edge_sampling.right.offset - 0.20).abs() < 1e-5);
     }
 }

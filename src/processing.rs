@@ -2,7 +2,10 @@
 //! Hermite smoothstep black-level cutoff, and temporal EMA smoothing.
 
 use crate::capture::{FrameBuffer, PixelFormat};
-use crate::config::{MonitorConfig, EDGE_BOTTOM, EDGE_LEFT, EDGE_RIGHT, EDGE_TOP};
+use crate::config::{
+    EdgeSamplingSettings, EdgeStripConfig, MonitorConfig, EDGE_BOTTOM, EDGE_LEFT, EDGE_RIGHT,
+    EDGE_TOP,
+};
 
 /// Rectangular region of interest `(x, y, width, height)` in pixels.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -217,90 +220,125 @@ pub fn calculate_edge_depth_pixels(
     pixels.clamp(min_pixels, max_allowed)
 }
 
-/// Computes bounding boxes `(x, y, w, h)` for all four screen edges.
-pub fn calculate_edge_rois(width: u32, height: u32, edge_depth: f32) -> EdgeRois {
-    let px_left = calculate_edge_depth_pixels(width, edge_depth, 0.5, 1);
-    let px_top = calculate_edge_depth_pixels(height, edge_depth, 0.5, 1);
-    let px_right = calculate_edge_depth_pixels(width, edge_depth, 0.5, 1);
-    let px_bottom = calculate_edge_depth_pixels(height, edge_depth, 0.5, 1);
+/// Computes `[start_px, end_px)` along one axis `[axis_start, axis_end)` for a strip with
+/// `strip.depth` width starting `strip.offset` inward from the border.
+pub fn compute_strip_bounds(
+    axis_start: u32,
+    axis_end: u32,
+    strip: EdgeStripConfig,
+    from_end: bool,
+) -> (u32, u32) {
+    let dim = axis_end.saturating_sub(axis_start);
+    if dim <= 1 {
+        return (axis_start, axis_start + dim);
+    }
+
+    let offset_px = if !strip.offset.is_finite() || strip.offset <= 0.0 {
+        0
+    } else if strip.offset <= 1.0 {
+        ((dim as f32) * strip.offset.clamp(0.0, 0.90)).round() as u32
+    } else {
+        strip.offset.round() as u32
+    }
+    .min(dim - 1);
+
+    let depth_px = calculate_edge_depth_pixels(dim, strip.depth, 0.5, 1);
+
+    if from_end {
+        let r1 = axis_end.saturating_sub(offset_px).max(axis_start + 1);
+        let r0 = r1.saturating_sub(depth_px).max(axis_start).min(r1 - 1);
+        (r0, r1)
+    } else {
+        let r0 = (axis_start + offset_px).min(axis_end - 1);
+        let r1 = (r0 + depth_px).min(axis_end).max(r0 + 1);
+        (r0, r1)
+    }
+}
+
+/// Computes bounding boxes `(x, y, w, h)` for all four screen edges with per-side width & offset.
+pub fn calculate_edge_rois_with_sampling(
+    width: u32,
+    height: u32,
+    sampling: &EdgeSamplingSettings,
+) -> EdgeRois {
+    let (lx0, lx1) = compute_strip_bounds(0, width, sampling.left, false);
+    let (ty0, ty1) = compute_strip_bounds(0, height, sampling.top, false);
+    let (rx0, rx1) = compute_strip_bounds(0, width, sampling.right, true);
+    let (by0, by1) = compute_strip_bounds(0, height, sampling.bottom, true);
 
     EdgeRois {
         left: Roi {
-            x: 0,
+            x: lx0,
             y: 0,
-            w: px_left,
+            w: lx1.saturating_sub(lx0),
             h: height,
         },
         top: Roi {
             x: 0,
-            y: 0,
+            y: ty0,
             w: width,
-            h: px_top,
+            h: ty1.saturating_sub(ty0),
         },
         right: Roi {
-            x: width.saturating_sub(px_right),
+            x: rx0,
             y: 0,
-            w: px_right,
+            w: rx1.saturating_sub(rx0),
             h: height,
         },
         bottom: Roi {
             x: 0,
-            y: height.saturating_sub(px_bottom),
+            y: by0,
             w: width,
-            h: px_bottom,
+            h: by1.saturating_sub(by0),
         },
     }
 }
 
-/// Computes individual LED segment ROIs along an edge (`"left"`, `"top"`, `"right"`, `"bottom"`).
-pub fn calculate_segment_rois(
+/// Computes bounding boxes `(x, y, w, h)` for all four screen edges.
+pub fn calculate_edge_rois(width: u32, height: u32, edge_depth: f32) -> EdgeRois {
+    calculate_edge_rois_with_sampling(width, height, &EdgeSamplingSettings::uniform(edge_depth))
+}
+
+/// Computes individual LED segment ROIs along an edge (`"left"`, `"top"`, `"right"`, `"bottom"`)
+/// using the specified `EdgeStripConfig`.
+pub fn calculate_segment_rois_with_sampling(
     width: u32,
     height: u32,
     edge: &str,
     num_leds: usize,
-    edge_depth: f32,
+    strip: EdgeStripConfig,
 ) -> Vec<Roi> {
     if num_leds == 0 || width == 0 || height == 0 {
         return Vec::new();
     }
 
-    let depth_x = calculate_edge_depth_pixels(width, edge_depth, 0.5, 1);
-    let depth_y = calculate_edge_depth_pixels(height, edge_depth, 0.5, 1);
     let mut rois = Vec::with_capacity(num_leds);
 
     match edge {
         EDGE_TOP | EDGE_BOTTOM => {
-            let y = if edge == EDGE_TOP {
-                0
-            } else {
-                height.saturating_sub(depth_y)
-            };
-            let h = depth_y;
+            let (y0, y1) = compute_strip_bounds(0, height, strip, edge == EDGE_BOTTOM);
+            let h = y1.saturating_sub(y0).max(1);
             for i in 0..num_leds {
                 let x1 = (((i as f64) * (width as f64)) / (num_leds as f64)).round() as u32;
                 let x2 = ((((i + 1) as f64) * (width as f64)) / (num_leds as f64)).round() as u32;
                 let seg_w = x2.saturating_sub(x1).max(1);
                 rois.push(Roi {
                     x: x1,
-                    y,
+                    y: y0,
                     w: seg_w,
                     h,
                 });
             }
         }
         EDGE_LEFT | EDGE_RIGHT => {
-            let x = if edge == EDGE_LEFT {
-                0
-            } else {
-                width.saturating_sub(depth_x)
-            };
-            let w = depth_x;
+            let (x0, x1) = compute_strip_bounds(0, width, strip, edge == EDGE_RIGHT);
+            let w = x1.saturating_sub(x0).max(1);
             for i in 0..num_leds {
                 let y1 = (((i as f64) * (height as f64)) / (num_leds as f64)).round() as u32;
                 let y2 = ((((i + 1) as f64) * (height as f64)) / (num_leds as f64)).round() as u32;
                 let seg_h = y2.saturating_sub(y1).max(1);
                 rois.push(Roi {
-                    x,
+                    x: x0,
                     y: y1,
                     w,
                     h: seg_h,
@@ -311,6 +349,26 @@ pub fn calculate_segment_rois(
     }
 
     rois
+}
+
+/// Computes individual LED segment ROIs along an edge (`"left"`, `"top"`, `"right"`, `"bottom"`).
+pub fn calculate_segment_rois(
+    width: u32,
+    height: u32,
+    edge: &str,
+    num_leds: usize,
+    edge_depth: f32,
+) -> Vec<Roi> {
+    calculate_segment_rois_with_sampling(
+        width,
+        height,
+        edge,
+        num_leds,
+        EdgeStripConfig {
+            depth: edge_depth,
+            offset: 0.0,
+        },
+    )
 }
 
 /// Detects symmetric letterbox (top/bottom) and pillarbox (left/right) black bars up to 25% of
@@ -637,7 +695,7 @@ fn downscale_and_correct_into_thumb(
 struct EdgeSamplingRegion {
     w: u32,
     h: u32,
-    edge_depth: f32,
+    sampling: EdgeSamplingSettings,
     bars: BlackBarInsets,
 }
 
@@ -663,52 +721,35 @@ fn sample_edge_area_averages(
     let active_w = active_x1 - active_x0;
     let active_h = active_y1 - active_y0;
 
-    let depth_x = calculate_edge_depth_pixels(active_w, region.edge_depth, 0.5, 1);
-    let depth_y = calculate_edge_depth_pixels(active_h, region.edge_depth, 0.5, 1);
+    let strip = region.sampling.for_edge(edge);
+    let (ry0_edge, ry1_edge) = match edge {
+        EDGE_TOP => compute_strip_bounds(active_y0, active_y1, strip, false),
+        EDGE_BOTTOM => compute_strip_bounds(active_y0, active_y1, strip, true),
+        _ => (0, 0),
+    };
+    let (rx0_edge, rx1_edge) = match edge {
+        EDGE_LEFT => compute_strip_bounds(active_x0, active_x1, strip, false),
+        EDGE_RIGHT => compute_strip_bounds(active_x0, active_x1, strip, true),
+        _ => (0, 0),
+    };
 
     let stride_w = w as usize;
 
     for i in 0..num_leds {
         let (rx0, ry0, rx1, ry1) = match edge {
-            EDGE_TOP => {
+            EDGE_TOP | EDGE_BOTTOM => {
                 let x1 = active_x0
                     + (((i as f64) * (active_w as f64)) / (num_leds as f64)).round() as u32;
                 let x2 = active_x0
                     + ((((i + 1) as f64) * (active_w as f64)) / (num_leds as f64)).round() as u32;
-                (
-                    x1,
-                    active_y0,
-                    x2.max(x1 + 1).min(active_x1),
-                    (active_y0 + depth_y).min(active_y1),
-                )
+                (x1, ry0_edge, x2.max(x1 + 1).min(active_x1), ry1_edge)
             }
-            EDGE_BOTTOM => {
-                let x1 = active_x0
-                    + (((i as f64) * (active_w as f64)) / (num_leds as f64)).round() as u32;
-                let x2 = active_x0
-                    + ((((i + 1) as f64) * (active_w as f64)) / (num_leds as f64)).round() as u32;
-                let y0 = active_y1.saturating_sub(depth_y).max(active_y0);
-                (x1, y0, x2.max(x1 + 1).min(active_x1), active_y1)
-            }
-            EDGE_LEFT => {
+            EDGE_LEFT | EDGE_RIGHT => {
                 let y1 = active_y0
                     + (((i as f64) * (active_h as f64)) / (num_leds as f64)).round() as u32;
                 let y2 = active_y0
                     + ((((i + 1) as f64) * (active_h as f64)) / (num_leds as f64)).round() as u32;
-                (
-                    active_x0,
-                    y1,
-                    (active_x0 + depth_x).min(active_x1),
-                    y2.max(y1 + 1).min(active_y1),
-                )
-            }
-            EDGE_RIGHT => {
-                let y1 = active_y0
-                    + (((i as f64) * (active_h as f64)) / (num_leds as f64)).round() as u32;
-                let y2 = active_y0
-                    + ((((i + 1) as f64) * (active_h as f64)) / (num_leds as f64)).round() as u32;
-                let x0 = active_x1.saturating_sub(depth_x).max(active_x0);
-                (x0, y1, active_x1, y2.max(y1 + 1).min(active_y1))
+                (rx0_edge, y1, rx1_edge, y2.max(y1 + 1).min(active_y1))
             }
             _ => continue,
         };
@@ -742,9 +783,9 @@ fn sample_edge_area_averages(
 }
 
 /// Processes a single monitor frame into contiguous RGB bytes ordered according to
-/// `cfg.edge_order` and `cfg.edge_directions`.
+/// `cfg.edge_order` and `cfg.edge_directions`, using per-side `edge_sampling` settings.
 #[allow(clippy::too_many_arguments)]
-pub fn process_monitor_frame_into(
+pub fn process_monitor_frame_with_sampling_into(
     frame: &FrameBuffer,
     cfg: &MonitorConfig,
     resolution_preset: &str,
@@ -752,7 +793,7 @@ pub fn process_monitor_frame_into(
     saturation: f32,
     white_balance: [f32; 3],
     gamma: f32,
-    edge_depth: f32,
+    edge_sampling: &EdgeSamplingSettings,
     black_threshold: f32,
     black_bar_detection: bool,
     oversample_factor: f32,
@@ -784,7 +825,7 @@ pub fn process_monitor_frame_into(
     let region = EdgeSamplingRegion {
         w: eff_w,
         h: eff_h,
-        edge_depth,
+        sampling: *edge_sampling,
         bars,
     };
 
@@ -815,6 +856,76 @@ pub fn process_monitor_frame_into(
     }
 }
 
+/// Processes a single monitor frame into contiguous RGB bytes ordered according to
+/// `cfg.edge_order` and `cfg.edge_directions` using a uniform `edge_depth`.
+#[allow(clippy::too_many_arguments)]
+pub fn process_monitor_frame_into(
+    frame: &FrameBuffer,
+    cfg: &MonitorConfig,
+    resolution_preset: &str,
+    brightness: f32,
+    saturation: f32,
+    white_balance: [f32; 3],
+    gamma: f32,
+    edge_depth: f32,
+    black_threshold: f32,
+    black_bar_detection: bool,
+    oversample_factor: f32,
+    scratch: &mut ProcessingScratch,
+    out_rgb_bytes: &mut Vec<u8>,
+) {
+    process_monitor_frame_with_sampling_into(
+        frame,
+        cfg,
+        resolution_preset,
+        brightness,
+        saturation,
+        white_balance,
+        gamma,
+        &EdgeSamplingSettings::uniform(edge_depth),
+        black_threshold,
+        black_bar_detection,
+        oversample_factor,
+        scratch,
+        out_rgb_bytes,
+    );
+}
+
+/// Convenience allocating wrapper around `process_monitor_frame_with_sampling_into`.
+#[allow(clippy::too_many_arguments)]
+pub fn process_monitor_frame_with_sampling(
+    frame: &FrameBuffer,
+    cfg: &MonitorConfig,
+    resolution_preset: &str,
+    brightness: f32,
+    saturation: f32,
+    white_balance: [f32; 3],
+    gamma: f32,
+    edge_sampling: &EdgeSamplingSettings,
+    black_threshold: f32,
+    black_bar_detection: bool,
+    oversample_factor: f32,
+) -> Vec<u8> {
+    let mut scratch = ProcessingScratch::default();
+    let mut out = Vec::with_capacity(cfg.total_leds() * 3);
+    process_monitor_frame_with_sampling_into(
+        frame,
+        cfg,
+        resolution_preset,
+        brightness,
+        saturation,
+        white_balance,
+        gamma,
+        edge_sampling,
+        black_threshold,
+        black_bar_detection,
+        oversample_factor,
+        &mut scratch,
+        &mut out,
+    );
+    out
+}
+
 /// Convenience allocating wrapper around `process_monitor_frame_into`.
 #[allow(clippy::too_many_arguments)]
 pub fn process_monitor_frame(
@@ -830,9 +941,7 @@ pub fn process_monitor_frame(
     black_bar_detection: bool,
     oversample_factor: f32,
 ) -> Vec<u8> {
-    let mut scratch = ProcessingScratch::default();
-    let mut out = Vec::with_capacity(cfg.total_leds() * 3);
-    process_monitor_frame_into(
+    process_monitor_frame_with_sampling(
         frame,
         cfg,
         resolution_preset,
@@ -840,14 +949,11 @@ pub fn process_monitor_frame(
         saturation,
         white_balance,
         gamma,
-        edge_depth,
+        &EdgeSamplingSettings::uniform(edge_depth),
         black_threshold,
         black_bar_detection,
         oversample_factor,
-        &mut scratch,
-        &mut out,
-    );
-    out
+    )
 }
 
 #[cfg(test)]
@@ -1177,5 +1283,126 @@ mod tests {
         let mut white = vec![255u8; 12];
         smoother.apply(&mut white, 0.5, 0.0);
         assert!(white.iter().all(|&b| (b as i32 - 127).abs() <= 1));
+    }
+
+    #[test]
+    fn per_side_edge_strip_width_and_offset() {
+        let sampling = EdgeSamplingSettings {
+            top: EdgeStripConfig {
+                depth: 0.10,
+                offset: 0.05,
+            },
+            bottom: EdgeStripConfig {
+                depth: 0.12,
+                offset: 0.10,
+            },
+            left: EdgeStripConfig {
+                depth: 0.08,
+                offset: 0.02,
+            },
+            right: EdgeStripConfig {
+                depth: 0.15,
+                offset: 0.20,
+            },
+        };
+
+        let rois = calculate_edge_rois_with_sampling(1000, 500, &sampling);
+        assert_eq!(
+            rois.top,
+            Roi {
+                x: 0,
+                y: 25,
+                w: 1000,
+                h: 50
+            }
+        );
+        assert_eq!(
+            rois.bottom,
+            Roi {
+                x: 0,
+                y: 390,
+                w: 1000,
+                h: 60
+            }
+        );
+        assert_eq!(
+            rois.left,
+            Roi {
+                x: 20,
+                y: 0,
+                w: 80,
+                h: 500
+            }
+        );
+        assert_eq!(
+            rois.right,
+            Roi {
+                x: 650,
+                y: 0,
+                w: 150,
+                h: 500
+            }
+        );
+
+        // Functional frame test: bottom 10% is green (taskbar), rows 75..90 are blue, top 10% is red
+        let w = 100u32;
+        let h = 100u32;
+        let mut rgb = vec![0u8; (w * h * 3) as usize];
+        for y in 0..h {
+            for x in 0..w {
+                let idx = ((y * w + x) * 3) as usize;
+                if y < 10 {
+                    rgb[idx] = 255; // Top red
+                } else if (75..90).contains(&y) {
+                    rgb[idx + 2] = 255; // Inner-bottom blue
+                } else if y >= 90 {
+                    rgb[idx + 1] = 255; // Bottom border green (taskbar)
+                }
+            }
+        }
+        let fb = FrameBuffer::new(w, h, PixelFormat::Rgb8, rgb);
+        let mon = MonitorConfig {
+            leds_top: 4,
+            leds_bottom: 4,
+            leds_left: 0,
+            leds_right: 0,
+            edge_order: vec![EDGE_TOP.to_string(), EDGE_BOTTOM.to_string()],
+            ..Default::default()
+        };
+
+        let frame_sampling = EdgeSamplingSettings {
+            top: EdgeStripConfig {
+                depth: 0.10,
+                offset: 0.0,
+            },
+            bottom: EdgeStripConfig {
+                depth: 0.15,
+                offset: 0.10,
+            },
+            ..Default::default()
+        };
+
+        let out = process_monitor_frame_with_sampling(
+            &fb,
+            &mon,
+            "Balance (128x72)",
+            1.0,
+            1.0,
+            [1.0, 1.0, 1.0],
+            1.0,
+            &frame_sampling,
+            0.0,
+            false,
+            2.0,
+        );
+        assert_eq!(out.len(), 8 * 3);
+        // Top 4 LEDs: pure red
+        for px in &out.as_chunks::<3>().0[..4] {
+            assert!(px[0] >= 240 && px[1] < 15 && px[2] < 15, "top={px:?}");
+        }
+        // Bottom 4 LEDs: pure blue (green taskbar at bottom 10% skipped!)
+        for px in &out.as_chunks::<3>().0[4..8] {
+            assert!(px[2] >= 220 && px[1] < 30 && px[0] < 15, "bottom={px:?}");
+        }
     }
 }

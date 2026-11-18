@@ -11,7 +11,8 @@ use crate::capture::{create_capturer, CaptureStatus, FrameBuffer, PixelFormat, S
 use crate::config::{AppConfig, WledProtocol};
 use crate::error::{GlowledError, Result};
 use crate::processing::{
-    process_monitor_frame_into, resolve_capture_resolution, ProcessingScratch, TemporalSmoother,
+    process_monitor_frame_with_sampling_into, resolve_capture_resolution, ProcessingScratch,
+    TemporalSmoother,
 };
 
 /// Commands sent from the UI/Tray thread to the background worker thread.
@@ -23,10 +24,17 @@ pub enum WorkerCommand {
     Stop,
 }
 
+/// Per-monitor live preview colors sent to the UI thread.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct MonitorPreview {
+    pub mss_index: usize,
+    pub colors: Vec<[u8; 3]>,
+}
+
 /// Telemetry and preview updates sent back to the UI thread (only when UI is visible).
 #[derive(Clone, Debug)]
 pub enum WorkerEvent {
-    PreviewColors(Vec<[u8; 3]>),
+    PreviewColors(Vec<MonitorPreview>),
     StatusUpdate {
         active: bool,
         fps: f32,
@@ -256,6 +264,8 @@ fn run_worker_loop<F>(
     let mut scratch = ProcessingScratch::default();
     let mut smoother = TemporalSmoother::default();
     let mut current_rgb_bytes = Vec::with_capacity(512);
+    let mut monitor_byte_ranges: Vec<(usize, usize, usize)> = Vec::with_capacity(4);
+    let mut last_previews: Vec<MonitorPreview> = Vec::new();
     let mut packet_buf = Vec::with_capacity(528);
     let mut last_packet = Vec::new();
     let mut ddp_seq: u8 = 1;
@@ -296,7 +306,19 @@ fn run_worker_loop<F>(
                     if target_changed {
                         target_addr = resolve_target(&new_cfg.ip, new_cfg.port).ok();
                     }
+                    let topology_changed = new_cfg.monitors.len() != cfg.monitors.len()
+                        || new_cfg
+                            .monitors
+                            .iter()
+                            .zip(cfg.monitors.iter())
+                            .any(|(a, b)| {
+                                a.mss_index != b.mss_index || a.total_leds() != b.total_leds()
+                            });
+                    if topology_changed {
+                        smoother.reset();
+                    }
                     sync_capturers(&new_cfg, &mut capturers, &mut last_frames, &factory);
+                    last_packet.clear();
                     cfg = new_cfg;
                 }
                 WorkerCommand::SetActive(new_active) => {
@@ -332,6 +354,10 @@ fn run_worker_loop<F>(
                             fps: if active { last_fps } else { 0.0 },
                             error: last_error.clone(),
                         });
+                        if !last_previews.is_empty() {
+                            let _ = event_tx
+                                .try_send(WorkerEvent::PreviewColors(last_previews.clone()));
+                        }
                     }
                 }
             }
@@ -357,12 +383,17 @@ fn run_worker_loop<F>(
                             fps: 0.0,
                             error: last_error.clone(),
                         });
+                        if !last_previews.is_empty() {
+                            let _ = event_tx
+                                .try_send(WorkerEvent::PreviewColors(last_previews.clone()));
+                        }
                     }
                 }
                 Ok(WorkerCommand::UpdateConfig(mut new_cfg)) => {
                     new_cfg.sanitize();
                     target_addr = resolve_target(&new_cfg.ip, new_cfg.port).ok();
                     sync_capturers(&new_cfg, &mut capturers, &mut last_frames, &factory);
+                    last_packet.clear();
                     cfg = new_cfg;
                 }
                 Err(_) => {}
@@ -433,6 +464,7 @@ fn run_worker_loop<F>(
 
         // 3. Process frames and assemble RGB payload across monitors
         current_rgb_bytes.clear();
+        monitor_byte_ranges.clear();
         for mon_cfg in &cfg.monitors {
             let idx = mon_cfg.mss_index.max(1);
             let Some(frame) = last_frames.get(&idx) else {
@@ -441,7 +473,8 @@ fn run_worker_loop<F>(
             if frame.is_empty() {
                 continue;
             }
-            process_monitor_frame_into(
+            let start = current_rgb_bytes.len();
+            process_monitor_frame_with_sampling_into(
                 frame,
                 mon_cfg,
                 &cfg.resolution,
@@ -449,13 +482,15 @@ fn run_worker_loop<F>(
                 cfg.saturation,
                 cfg.white_balance,
                 cfg.gamma,
-                cfg.edge_depth,
+                &cfg.edge_sampling,
                 cfg.black_threshold,
                 cfg.black_bar_detection,
                 cfg.oversample_factor,
                 &mut scratch,
                 &mut current_rgb_bytes,
             );
+            let end = current_rgb_bytes.len();
+            monitor_byte_ranges.push((idx, start, end));
         }
 
         if !current_rgb_bytes.is_empty() {
@@ -481,9 +516,14 @@ fn run_worker_loop<F>(
                 }
             }
 
+            last_previews.clear();
+            for &(mss_index, start, end) in &monitor_byte_ranges {
+                let colors = current_rgb_bytes[start..end].as_chunks::<3>().0.to_vec();
+                last_previews.push(MonitorPreview { mss_index, colors });
+            }
+
             if ui_open {
-                let preview: Vec<[u8; 3]> = current_rgb_bytes.as_chunks::<3>().0.to_vec();
-                let _ = event_tx.try_send(WorkerEvent::PreviewColors(preview));
+                let _ = event_tx.try_send(WorkerEvent::PreviewColors(last_previews.clone()));
             }
         }
 
@@ -607,5 +647,127 @@ mod tests {
         handle.stop();
         // Verify FallbackCapturer compiles and resets cleanly too
         let _ = FallbackCapturer::new(1);
+    }
+
+    #[test]
+    fn multi_monitor_worker_emits_separated_previews_and_concatenated_udp() {
+        use crate::config::{MonitorConfig, EDGE_TOP};
+
+        let recv_sock = UdpSocket::bind("127.0.0.1:0").unwrap();
+        recv_sock
+            .set_read_timeout(Some(Duration::from_millis(800)))
+            .unwrap();
+        let port = recv_sock.local_addr().unwrap().port();
+
+        let mon1 = MonitorConfig {
+            mss_index: 1,
+            leds_top: 4,
+            leds_bottom: 0,
+            leds_left: 0,
+            leds_right: 0,
+            edge_order: vec![EDGE_TOP.to_string()],
+            ..Default::default()
+        };
+        let mon2 = MonitorConfig {
+            mss_index: 2,
+            leds_top: 6,
+            leds_bottom: 0,
+            leds_left: 0,
+            leds_right: 0,
+            edge_order: vec![EDGE_TOP.to_string()],
+            ..Default::default()
+        };
+
+        let cfg = AppConfig {
+            ip: "127.0.0.1".to_string(),
+            port,
+            fps: 60,
+            eco_mode: false,
+            monitors: vec![mon1, mon2],
+            ..Default::default()
+        };
+
+        struct ColorCapturer {
+            idx: usize,
+            rgb: [u8; 3],
+        }
+        impl ScreenCapturer for ColorCapturer {
+            fn capture_into(
+                &mut self,
+                target_w: u32,
+                target_h: u32,
+                out: &mut FrameBuffer,
+            ) -> CaptureStatus {
+                let w = target_w.max(32);
+                let h = target_h.max(18);
+                out.width = w;
+                out.height = h;
+                out.format = PixelFormat::Rgb8;
+                out.data.clear();
+                for _ in 0..(w * h) {
+                    out.data.extend_from_slice(&self.rgb);
+                }
+                CaptureStatus::NewFrame
+            }
+            fn display_info(&self) -> DisplayInfo {
+                DisplayInfo {
+                    index: self.idx,
+                    name: format!("Mock {}", self.idx),
+                    width: 1920,
+                    height: 1080,
+                    left: 0,
+                    top: 0,
+                }
+            }
+            fn reset(&mut self) -> Result<()> {
+                Ok(())
+            }
+        }
+
+        let mut handle = WorkerHandle::spawn_with_factory(cfg, true, |idx| {
+            let rgb = if idx == 1 {
+                [220, 10, 10]
+            } else {
+                [10, 20, 230]
+            };
+            Box::new(ColorCapturer { idx, rgb })
+        })
+        .unwrap();
+        handle.set_ui_open(true);
+
+        let mut buf = [0u8; 1024];
+        let (n, _) = recv_sock.recv_from(&mut buf).unwrap();
+        assert_eq!(n, 2 + (4 + 6) * 3);
+        // First 4 LEDs belong to monitor 1 (red), next 6 LEDs belong to monitor 2 (blue)
+        for led in 0..4 {
+            let base = 2 + led * 3;
+            assert!(buf[base] >= 200 && buf[base + 2] < 30);
+        }
+        for led in 4..10 {
+            let base = 2 + led * 3;
+            assert!(buf[base + 2] >= 200 && buf[base] < 30);
+        }
+
+        let mut got_separated_preview = false;
+        for _ in 0..20 {
+            if let Some(WorkerEvent::PreviewColors(previews)) = handle.try_recv_event() {
+                assert_eq!(previews.len(), 2);
+                assert_eq!(previews[0].mss_index, 1);
+                assert_eq!(previews[0].colors.len(), 4);
+                assert!(previews[0].colors.iter().all(|c| c[0] >= 200 && c[2] < 30));
+                assert_eq!(previews[1].mss_index, 2);
+                assert_eq!(previews[1].colors.len(), 6);
+                assert!(previews[1].colors.iter().all(|c| c[2] >= 200 && c[0] < 30));
+                got_separated_preview = true;
+                break;
+            }
+            std::thread::sleep(Duration::from_millis(20));
+        }
+        assert!(
+            got_separated_preview,
+            "Expected separated PreviewColors for 2 monitors"
+        );
+
+        handle.stop();
     }
 }
