@@ -1,0 +1,55 @@
+[package]
+name = "glowled"
+version = "2.0.0"
+edition = "2021"
+description = "High-Performance WLED Ambilight Controller in Rust with Slint GUI"
+license = "GPL-3.0-only"
+
+[lib]
+name = "glowled"
+path = "src/lib.rs"
+
+[[bin]]
+name = "glowled"
+path = "src/main.rs"
+
+[dependencies]
+slint = { version = "1.19", default-features = false, features = ["std", "compat-1-2", "backend-winit", "renderer-software"] }
+tray-icon = { version = "0.26", default-features = false, features = ["ksni"] }
+muda = { version = "0.21", default-features = false, features = ["snapshot"] }
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+directories = "6.0"
+crossbeam-channel = "0.5"
+image = { version = "0.25", default-features = false, features = ["ico", "png"] }
+
+[target.'cfg(unix)'.dependencies]
+fontique = { version = "0.12", features = ["fontconfig-dlopen"] }
+
+[target.'cfg(unix)'.build-dependencies]
+fontique = { version = "0.12", features = ["fontconfig-dlopen"] }
+
+[target.'cfg(windows)'.dependencies]
+winreg = "0.56"
+windows = { version = "0.58", features = [
+    "Win32_Foundation",
+    "Win32_Graphics_Direct3D",
+    "Win32_Graphics_Direct3D11",
+    "Win32_Graphics_Dxgi",
+    "Win32_Graphics_Dxgi_Common",
+    "Win32_Graphics_Gdi",
+    "Win32_Security",
+    "Win32_System_LibraryLoader",
+    "Win32_System_Threading",
+    "Win32_UI_WindowsAndMessaging",
+] }
+
+[build-dependencies]
+slint-build = "1.19"
+
+[profile.release]
+opt-level = "z"
+lto = true
+codegen-units = 1
+strip = true
+panic = "abort"

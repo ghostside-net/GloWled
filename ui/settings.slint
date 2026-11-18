@@ -1,0 +1,624 @@
+import {
+    Button,
+    CheckBox,
+    ComboBox,
+    HorizontalBox,
+    LineEdit,
+    Palette,
+    ScrollView,
+    Slider,
+    SpinBox,
+    VerticalBox,
+} from "std-widgets.slint";
+
+component SectionCard inherits Rectangle {
+    in property <string> title;
+    background: #18181b;
+    border-color: #27272a;
+    border-width: 1px;
+    border-radius: 10px;
+
+    VerticalBox {
+        padding: 14px;
+        spacing: 10px;
+
+        Text {
+            text: root.title;
+            color: #f4f4f5;
+            font-size: 14px;
+            font-weight: 700;
+        }
+
+        @children
+    }
+}
+
+component TabChip inherits Rectangle {
+    in property <string> label;
+    in property <bool> active;
+    callback clicked();
+
+    height: 34px;
+    border-radius: 8px;
+    background: root.active ? #2563eb : (touch.has-hover ? #27272a : #18181b);
+    border-width: 1px;
+    border-color: root.active ? #3b82f6 : #27272a;
+
+    touch := TouchArea {
+        clicked => { root.clicked(); }
+    }
+
+    Text {
+        text: root.label;
+        color: root.active ? #ffffff : #a1a1aa;
+        font-size: 12px;
+        font-weight: root.active ? 700 : 500;
+        horizontal-alignment: center;
+        vertical-alignment: center;
+    }
+}
+
+export component SettingsWindow inherits Window {
+    title: "GloWled — Ambilight Controller";
+    preferred-width: 660px;
+    preferred-height: 760px;
+    min-width: 580px;
+    min-height: 620px;
+    background: #0f0f11;
+
+    init => {
+        Palette.color-scheme = ColorScheme.dark;
+    }
+
+    // Active tab index (0: Verbindung, 1: Geometrie, 2: Bild & Farbe, 3: System)
+    in-out property <int> active_tab: 0;
+
+    // 1. Verbindung
+    in-out property <string> wled_ip: "127.0.0.1";
+    in-out property <string> wled_port: "21324";
+    in-out property <int> protocol_index: 0;
+    in-out property <string> connection_status: "";
+    in-out property <bool> connection_ok: true;
+
+    // 2. LED-Geometrie
+    in-out property <int> leds_top: 15;
+    in-out property <int> leds_bottom: 15;
+    in-out property <int> leds_left: 9;
+    in-out property <int> leds_right: 9;
+    in-out property <int> start_corner_index: 0;
+    in-out property <bool> clockwise: true;
+
+    // 3. Bild & Farbe
+    in-out property <int> fps_limit: 60;
+    in-out property <float> gamma: 1.0;
+    in-out property <float> brightness: 1.0;
+    in-out property <float> saturation: 1.0;
+    in-out property <int> smoothing_pct: 10;
+    in-out property <int> black_threshold: 15;
+    in-out property <int> edge_depth_pct: 8;
+    in-out property <bool> black_bar_detection: true;
+    in-out property <int> resolution_index: 0;
+    in-out property <[string]> monitor_models: ["Monitor 1 (1920x1080)"];
+    in-out property <int> selected_monitor_index: 0;
+
+    // 4. System & Live Status
+    in-out property <bool> ambilight_active: true;
+    in-out property <bool> eco_mode: true;
+    in-out property <bool> autostart: false;
+    in-out property <bool> start_minimized: true;
+    in-out property <string> live_status_text: "Bereit";
+    in-out property <string> status_badge_text: "AKTIV";
+    in-out property <[color]> preview_colors: [];
+
+    // Callbacks
+    callback test-connection();
+    callback apply-settings();
+    callback toggle-active(bool);
+    callback detect-monitors();
+    callback toggle-autostart(bool);
+    callback hide-to-tray();
+
+    VerticalBox {
+        padding: 16px;
+        spacing: 12px;
+
+        // Top Header
+        HorizontalBox {
+            padding: 0px;
+            spacing: 10px;
+            alignment: space-between;
+
+            HorizontalBox {
+                padding: 0px;
+                spacing: 6px;
+                Text {
+                    text: "GloWled";
+                    color: #38bdf8;
+                    font-size: 22px;
+                    font-weight: 800;
+                    vertical-alignment: center;
+                }
+                Text {
+                    text: "• Rust + Slint Edition";
+                    color: #71717a;
+                    font-size: 13px;
+                    vertical-alignment: center;
+                }
+            }
+
+            Rectangle {
+                height: 28px;
+                min-width: 110px;
+                border-radius: 6px;
+                background: root.ambilight_active ? #064e3b : #450a0a;
+                border-width: 1px;
+                border-color: root.ambilight_active ? #10b981 : #dc2626;
+
+                Text {
+                    text: "● " + root.status_badge_text;
+                    color: root.ambilight_active ? #34d399 : #f87171;
+                    font-size: 12px;
+                    font-weight: 700;
+                    horizontal-alignment: center;
+                    vertical-alignment: center;
+                }
+            }
+        }
+
+        // Live Edge Color Preview Strip (updates only when window is visible)
+        if root.preview_colors.length > 0 : Rectangle {
+            height: 12px;
+            border-radius: 6px;
+            background: #18181b;
+            clip: true;
+
+            HorizontalLayout {
+                for c in root.preview_colors : Rectangle {
+                    background: c;
+                    horizontal-stretch: 1;
+                }
+            }
+        }
+
+        // Navigation Tabs
+        HorizontalBox {
+            padding: 0px;
+            spacing: 8px;
+
+            TabChip {
+                label: "1. Verbindung";
+                active: root.active_tab == 0;
+                horizontal-stretch: 1;
+                clicked => { root.active_tab = 0; }
+            }
+            TabChip {
+                label: "2. LED-Geometrie";
+                active: root.active_tab == 1;
+                horizontal-stretch: 1;
+                clicked => { root.active_tab = 1; }
+            }
+            TabChip {
+                label: "3. Bild & Farbe";
+                active: root.active_tab == 2;
+                horizontal-stretch: 1;
+                clicked => { root.active_tab = 2; }
+            }
+            TabChip {
+                label: "4. System";
+                active: root.active_tab == 3;
+                horizontal-stretch: 1;
+                clicked => { root.active_tab = 3; }
+            }
+        }
+
+        // Tab Body
+        ScrollView {
+            vertical-stretch: 1;
+
+            VerticalBox {
+                padding: 2px;
+                spacing: 12px;
+
+                // TAB 0: Verbindung
+                if root.active_tab == 0 : VerticalBox {
+                    padding: 0px;
+                    spacing: 12px;
+
+                    SectionCard {
+                        title: "WLED-Controller Verbindung";
+
+                        HorizontalBox {
+                            padding: 0px;
+                            spacing: 10px;
+                            Text {
+                                text: "WLED IP-Adresse:";
+                                color: #e4e4e7;
+                                width: 140px;
+                                vertical-alignment: center;
+                            }
+                            LineEdit {
+                                text <=> root.wled_ip;
+                                placeholder-text: "z. B. 192.168.1.50";
+                                horizontal-stretch: 1;
+                            }
+                        }
+
+                        HorizontalBox {
+                            padding: 0px;
+                            spacing: 10px;
+                            Text {
+                                text: "UDP Port:";
+                                color: #e4e4e7;
+                                width: 140px;
+                                vertical-alignment: center;
+                            }
+                            LineEdit {
+                                text <=> root.wled_port;
+                                placeholder-text: "21324";
+                                horizontal-stretch: 1;
+                            }
+                        }
+
+                        HorizontalBox {
+                            padding: 0px;
+                            spacing: 10px;
+                            Text {
+                                text: "UDP-Protokoll:";
+                                color: #e4e4e7;
+                                width: 140px;
+                                vertical-alignment: center;
+                            }
+                            ComboBox {
+                                model: ["DRGB (WLED Standard)", "DDP (Distributed Display)", "WARLS (Legacy)"];
+                                current-index <=> root.protocol_index;
+                                horizontal-stretch: 1;
+                            }
+                        }
+
+                        HorizontalBox {
+                            padding: 0px;
+                            spacing: 12px;
+                            Button {
+                                text: "Verbindung testen (UDP Probe)";
+                                clicked => { root.test-connection(); }
+                            }
+                            Text {
+                                text: root.connection_status;
+                                color: root.connection_ok ? #34d399 : #f87171;
+                                vertical-alignment: center;
+                                horizontal-stretch: 1;
+                                wrap: word-wrap;
+                            }
+                        }
+                    }
+
+                    SectionCard {
+                        title: "Hinweise zu WLED";
+                        Text {
+                            text: "• Stellen Sie in WLED unter Config → Sync Interfaces sicher, dass 'Receive Realtime' auf Port 21324 (DRGB) bzw. Port 4048 (DDP) aktiv ist.\n• Änderungen greifen nach Klick auf 'Übernehmen & Speichern' ohne Neustart verzögerungsfrei.";
+                            color: #a1a1aa;
+                            font-size: 12px;
+                            wrap: word-wrap;
+                        }
+                    }
+                }
+
+                // TAB 1: LED-Geometrie
+                if root.active_tab == 1 : VerticalBox {
+                    padding: 0px;
+                    spacing: 12px;
+
+                    SectionCard {
+                        title: "LED-Anzahl pro Bildschirmkante";
+
+                        HorizontalBox {
+                            padding: 0px;
+                            spacing: 12px;
+                            Text { text: "Oben:"; color: #e4e4e7; width: 70px; vertical-alignment: center; }
+                            SpinBox { value <=> root.leds_top; minimum: 0; maximum: 500; horizontal-stretch: 1; }
+                            Text { text: "Unten:"; color: #e4e4e7; width: 70px; vertical-alignment: center; }
+                            SpinBox { value <=> root.leds_bottom; minimum: 0; maximum: 500; horizontal-stretch: 1; }
+                        }
+
+                        HorizontalBox {
+                            padding: 0px;
+                            spacing: 12px;
+                            Text { text: "Links:"; color: #e4e4e7; width: 70px; vertical-alignment: center; }
+                            SpinBox { value <=> root.leds_left; minimum: 0; maximum: 500; horizontal-stretch: 1; }
+                            Text { text: "Rechts:"; color: #e4e4e7; width: 70px; vertical-alignment: center; }
+                            SpinBox { value <=> root.leds_right; minimum: 0; maximum: 500; horizontal-stretch: 1; }
+                        }
+
+                        Text {
+                            text: "Gesamtanzahl LEDs: " + (root.leds_top + root.leds_bottom + root.leds_left + root.leds_right);
+                            color: #10b981;
+                            font-weight: 700;
+                            font-size: 13px;
+                        }
+                    }
+
+                    SectionCard {
+                        title: "Start-Ecke & Laufrichtung";
+
+                        HorizontalBox {
+                            padding: 0px;
+                            spacing: 10px;
+                            Text {
+                                text: "Start-Ecke:";
+                                color: #e4e4e7;
+                                width: 140px;
+                                vertical-alignment: center;
+                            }
+                            ComboBox {
+                                model: ["Unten Links", "Oben Links", "Oben Rechts", "Unten Rechts"];
+                                current-index <=> root.start_corner_index;
+                                horizontal-stretch: 1;
+                            }
+                        }
+
+                        HorizontalBox {
+                            padding: 0px;
+                            spacing: 10px;
+                            Text {
+                                text: "Ausrichtung:";
+                                color: #e4e4e7;
+                                width: 140px;
+                                vertical-alignment: center;
+                            }
+                            CheckBox {
+                                text: root.clockwise ? "Uhrzeigersinn (CW)" : "Gegenuhrzeigersinn (CCW)";
+                                checked <=> root.clockwise;
+                            }
+                        }
+                    }
+                }
+
+                // TAB 2: Bild & Farbe
+                if root.active_tab == 2 : VerticalBox {
+                    padding: 0px;
+                    spacing: 12px;
+
+                    SectionCard {
+                        title: "Capture & Monitor";
+
+                        HorizontalBox {
+                            padding: 0px;
+                            spacing: 10px;
+                            Text { text: "Monitor:"; color: #e4e4e7; width: 130px; vertical-alignment: center; }
+                            ComboBox {
+                                model: root.monitor_models;
+                                current-index <=> root.selected_monitor_index;
+                                horizontal-stretch: 1;
+                            }
+                            Button {
+                                text: "Erkennen";
+                                clicked => { root.detect-monitors(); }
+                            }
+                        }
+
+                        HorizontalBox {
+                            padding: 0px;
+                            spacing: 10px;
+                            Text { text: "Abtast-Auflösung:"; color: #e4e4e7; width: 130px; vertical-alignment: center; }
+                            ComboBox {
+                                model: [
+                                    "Auto (Adaptiv)",
+                                    "Performance (64x36)",
+                                    "Balance (128x72)",
+                                    "Quality (256x144)",
+                                    "Ultra (512x288)"
+                                ];
+                                current-index <=> root.resolution_index;
+                                horizontal-stretch: 1;
+                            }
+                        }
+
+                        HorizontalBox {
+                            padding: 0px;
+                            spacing: 10px;
+                            Text {
+                                text: "FPS-Limit: " + root.fps_limit;
+                                color: #e4e4e7;
+                                width: 130px;
+                                vertical-alignment: center;
+                            }
+                            Slider {
+                                minimum: 15;
+                                maximum: 120;
+                                value: root.fps_limit;
+                                horizontal-stretch: 1;
+                                changed(v) => { root.fps_limit = Math.round(v); }
+                            }
+                        }
+                    }
+
+                    SectionCard {
+                        title: "Farbe, Gamma & Kinobalken";
+
+                        HorizontalBox {
+                            padding: 0px;
+                            spacing: 10px;
+                            Text {
+                                text: "Helligkeit: " + (Math.round(root.brightness * 10) / 10) + "x";
+                                color: #e4e4e7;
+                                width: 150px;
+                                vertical-alignment: center;
+                            }
+                            Slider {
+                                minimum: 0.1;
+                                maximum: 3.0;
+                                value <=> root.brightness;
+                                horizontal-stretch: 1;
+                            }
+                        }
+
+                        HorizontalBox {
+                            padding: 0px;
+                            spacing: 10px;
+                            Text {
+                                text: "Sättigung: " + (Math.round(root.saturation * 10) / 10) + "x";
+                                color: #e4e4e7;
+                                width: 150px;
+                                vertical-alignment: center;
+                            }
+                            Slider {
+                                minimum: 0.0;
+                                maximum: 3.0;
+                                value <=> root.saturation;
+                                horizontal-stretch: 1;
+                            }
+                        }
+
+                        HorizontalBox {
+                            padding: 0px;
+                            spacing: 10px;
+                            Text {
+                                text: "Gamma: " + (Math.round(root.gamma * 10) / 10);
+                                color: #e4e4e7;
+                                width: 150px;
+                                vertical-alignment: center;
+                            }
+                            Slider {
+                                minimum: 1.0;
+                                maximum: 3.0;
+                                value <=> root.gamma;
+                                horizontal-stretch: 1;
+                            }
+                        }
+
+                        HorizontalBox {
+                            padding: 0px;
+                            spacing: 10px;
+                            Text {
+                                text: "Glättung: " + root.smoothing_pct + "%";
+                                color: #e4e4e7;
+                                width: 150px;
+                                vertical-alignment: center;
+                            }
+                            Slider {
+                                minimum: 0;
+                                maximum: 90;
+                                value: root.smoothing_pct;
+                                horizontal-stretch: 1;
+                                changed(v) => { root.smoothing_pct = Math.round(v); }
+                            }
+                        }
+
+                        HorizontalBox {
+                            padding: 0px;
+                            spacing: 10px;
+                            Text {
+                                text: "Schwarz-Schwelle: " + root.black_threshold;
+                                color: #e4e4e7;
+                                width: 150px;
+                                vertical-alignment: center;
+                            }
+                            Slider {
+                                minimum: 0;
+                                maximum: 50;
+                                value: root.black_threshold;
+                                horizontal-stretch: 1;
+                                changed(v) => { root.black_threshold = Math.round(v); }
+                            }
+                        }
+
+                        HorizontalBox {
+                            padding: 0px;
+                            spacing: 10px;
+                            Text {
+                                text: "Randtiefe: " + root.edge_depth_pct + "%";
+                                color: #e4e4e7;
+                                width: 150px;
+                                vertical-alignment: center;
+                            }
+                            Slider {
+                                minimum: 2;
+                                maximum: 50;
+                                value: root.edge_depth_pct;
+                                horizontal-stretch: 1;
+                                changed(v) => { root.edge_depth_pct = Math.round(v); }
+                            }
+                        }
+
+                        CheckBox {
+                            text: "Black-Bar-Detection (schwarze Kinobalken automatisch überspringen)";
+                            checked <=> root.black_bar_detection;
+                        }
+                    }
+                }
+
+                // TAB 3: System
+                if root.active_tab == 3 : VerticalBox {
+                    padding: 0px;
+                    spacing: 12px;
+
+                    SectionCard {
+                        title: "Betrieb & System-Tray";
+
+                        CheckBox {
+                            text: "Ambilight Capture & Streaming aktiv";
+                            checked <=> root.ambilight_active;
+                            toggled => { root.toggle-active(self.checked); }
+                        }
+
+                        CheckBox {
+                            text: "Eco-Modus (CPU-Last bei Standbildern auf ~0% senken)";
+                            checked <=> root.eco_mode;
+                        }
+
+                        CheckBox {
+                            text: "Autostart beim Windows-Login (HKCU\\...\\Run)";
+                            checked <=> root.autostart;
+                            toggled => { root.toggle-autostart(self.checked); }
+                        }
+
+                        CheckBox {
+                            text: "Immer direkt minimiert im System-Tray starten";
+                            checked <=> root.start_minimized;
+                        }
+                    }
+
+                    SectionCard {
+                        title: "Info & Ressourcen";
+                        Text {
+                            text: "GloWled v2.0.0 — Native Rust Single-Binary mit Slint UI.\nBeim Klick auf [X] wird nur das Fenster ausgeblendet (0% GPU/GUI-Overhead), während der Capture-Worker unauffällig im System-Tray weiterläuft.";
+                            color: #a1a1aa;
+                            font-size: 12px;
+                            wrap: word-wrap;
+                        }
+                    }
+                }
+            }
+        }
+
+        // Bottom Action Bar
+        Rectangle {
+            height: 1px;
+            background: #27272a;
+        }
+
+        HorizontalBox {
+            padding: 0px;
+            spacing: 10px;
+
+            Text {
+                text: root.live_status_text;
+                color: #a1a1aa;
+                font-size: 12px;
+                vertical-alignment: center;
+                horizontal-stretch: 1;
+            }
+
+            Button {
+                text: "In Tray ausblenden";
+                clicked => { root.hide-to-tray(); }
+            }
+
+            Button {
+                text: "Übernehmen & Speichern";
+                primary: true;
+                clicked => { root.apply-settings(); }
+            }
+        }
+    }
+}
