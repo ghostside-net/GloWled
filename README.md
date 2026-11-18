@@ -42,7 +42,8 @@
 
 ### Prerequisites
 - Rust toolchain (`rustc` / `cargo`, edition 2021)
-- For Windows builds: target `x86_64-pc-windows-msvc` (with MSVC Build Tools / Windows SDK)
+- For Windows native builds: target `x86_64-pc-windows-msvc` (with MSVC Build Tools / Windows SDK)
+- For Linux-to-Windows cross-compilation: target `x86_64-pc-windows-gnu` with `cargo-zigbuild`
 
 ### Build & Run Commands
 
@@ -50,11 +51,18 @@
 # Run all Rust unit and integration tests
 cargo test
 
-# Build size- & speed-optimized release binary (LTO, opt-level="z", strip=true)
+# Run linter and formatting checks
+cargo clippy --all-targets -- -D warnings
+cargo fmt --check
+
+# Build size- & speed-optimized release binary (LTO, opt-level=3, strip=true)
 cargo build --release
 
-# Windows target build
+# Windows target build (native MSVC)
 cargo build --release --target x86_64-pc-windows-msvc
+
+# Windows target cross-build from Linux (GNU + zigbuild)
+cargo zigbuild --release --target x86_64-pc-windows-gnu
 ```
 
 ### CLI Options

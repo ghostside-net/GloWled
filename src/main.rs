@@ -1,9 +1,8 @@
 #![windows_subsystem = "windows"]
 
 use std::cell::{Cell, RefCell};
+use std::process::ExitCode;
 use std::rc::Rc;
-use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use glowled::capture::{enumerate_displays, DisplayInfo, FrameBuffer, PixelFormat};
@@ -11,6 +10,7 @@ use glowled::config::{
     get_config_file_path, get_current_executable_path, is_autostart_enabled, load_config,
     save_config, set_autostart, AppConfig, StartCorner, WledProtocol,
 };
+use glowled::error::{GlowledError, Result};
 use glowled::processing::{process_monitor_frame_into, ProcessingScratch, TemporalSmoother};
 use glowled::tray::{TrayAction, TrayManager};
 use glowled::wled::{build_wled_packet_into, test_wled_connection, WorkerEvent, WorkerHandle};
@@ -46,8 +46,14 @@ fn index_to_resolution(idx: i32) -> &'static str {
 #[cfg(windows)]
 mod single_instance {
     use windows::core::w;
-    use windows::Win32::Foundation::{CloseHandle, GetLastError, ERROR_ALREADY_EXISTS, HANDLE};
+    use windows::Win32::Foundation::{
+        CloseHandle, GetLastError, BOOL, ERROR_ALREADY_EXISTS, HANDLE, HWND, LPARAM,
+    };
     use windows::Win32::System::Threading::CreateMutexW;
+    use windows::Win32::UI::WindowsAndMessaging::{
+        EnumWindows, GetWindowTextLengthW, GetWindowTextW, SetForegroundWindow, ShowWindow,
+        SW_RESTORE,
+    };
 
     pub struct InstanceGuard(HANDLE);
 
@@ -61,13 +67,44 @@ mod single_instance {
 
     pub fn acquire() -> Option<InstanceGuard> {
         unsafe {
-            let handle = CreateMutexW(None, false, w!("Global\\GloWled_SingleInstance_Mutex_v2"))
-                .ok()?;
+            let handle =
+                CreateMutexW(None, false, w!("Global\\GloWled_SingleInstance_Mutex_v2")).ok()?;
             if GetLastError() == ERROR_ALREADY_EXISTS {
                 let _ = CloseHandle(handle);
                 return None;
             }
             Some(InstanceGuard(handle))
+        }
+    }
+
+    unsafe extern "system" fn enum_window_cb(hwnd: HWND, lparam: LPARAM) -> BOOL {
+        let len = GetWindowTextLengthW(hwnd);
+        if len > 0 {
+            let mut buf = vec![0u16; (len as usize) + 1];
+            let copied = GetWindowTextW(hwnd, &mut buf);
+            if copied > 0 {
+                let title = String::from_utf16_lossy(&buf[..copied as usize]);
+                if title.contains("GloWled") {
+                    let target = &mut *(lparam.0 as *mut Option<HWND>);
+                    *target = Some(hwnd);
+                    return BOOL(0);
+                }
+            }
+        }
+        BOOL(1)
+    }
+
+    pub fn bring_existing_to_front() {
+        unsafe {
+            let mut target: Option<HWND> = None;
+            let _ = EnumWindows(
+                Some(enum_window_cb),
+                LPARAM(&mut target as *mut Option<HWND> as isize),
+            );
+            if let Some(hwnd) = target {
+                let _ = ShowWindow(hwnd, SW_RESTORE);
+                let _ = SetForegroundWindow(hwnd);
+            }
         }
     }
 }
@@ -78,6 +115,7 @@ mod single_instance {
     pub fn acquire() -> Option<InstanceGuard> {
         Some(InstanceGuard)
     }
+    pub fn bring_existing_to_front() {}
 }
 
 struct CliFlags {
@@ -114,8 +152,11 @@ impl CliFlags {
     }
 }
 
-fn run_headless_mode(cfg: AppConfig) {
-    println!("GloWled v{} — Headless Streaming Service", env!("CARGO_PKG_VERSION"));
+fn run_headless_mode(cfg: AppConfig) -> Result<()> {
+    println!(
+        "GloWled v{} — Headless Streaming Service",
+        env!("CARGO_PKG_VERSION")
+    );
     println!(
         "Ziel: {}:{} ({}) @ {} FPS | Eco-Modus: {}",
         cfg.ip,
@@ -125,13 +166,12 @@ fn run_headless_mode(cfg: AppConfig) {
         cfg.eco_mode
     );
 
-    let running = Arc::new(AtomicBool::new(true));
-    let mut worker = WorkerHandle::spawn(cfg, true);
-
-    while running.load(Ordering::Relaxed) {
+    let worker = WorkerHandle::spawn(cfg, true)?;
+    loop {
         std::thread::sleep(Duration::from_millis(250));
+        // Drain telemetry channel to prevent backpressure
+        while worker.try_recv_event().is_some() {}
     }
-    worker.stop();
 }
 
 fn read_process_rss_kb() -> Option<u64> {
@@ -153,9 +193,11 @@ fn read_process_rss_kb() -> Option<u64> {
 }
 
 fn run_benchmark_mode() {
-    let mut cfg = AppConfig::default();
-    cfg.fps = 60;
-    cfg.black_bar_detection = true;
+    let cfg = AppConfig {
+        fps: 60,
+        black_bar_detection: true,
+        ..Default::default()
+    };
     let mon = &cfg.monitors[0];
 
     // Simulate 1920x1080 BGRA desktop capture frame downsampled into processing thumbnail
@@ -216,15 +258,26 @@ fn run_benchmark_mode() {
     let single_core_pct = (per_frame_us / budget_60fps_us) * 100.0;
 
     println!("GloWled Benchmark ({iterations} Frames @ 1920x1080 BGRA -> 48 LEDs):");
-    println!("  Gesamtzeit:         {:.2} ms", total.as_secs_f64() * 1000.0);
-    println!("  Zeit pro Frame:     {:.2} µs ({:.3} ms)", per_frame_us, per_frame_us / 1000.0);
+    println!(
+        "  Gesamtzeit:         {:.2} ms",
+        total.as_secs_f64() * 1000.0
+    );
+    println!(
+        "  Zeit pro Frame:     {:.2} µs ({:.3} ms)",
+        per_frame_us,
+        per_frame_us / 1000.0
+    );
     println!(
         "  60 FPS Single-Core: {:.2}% (4-Core Äquivalent: {:.2}%)",
         single_core_pct,
         single_core_pct / 4.0
     );
     if let Some(rss_kb) = read_process_rss_kb() {
-        println!("  Prozess RSS:        {:.2} MB ({} KB)", rss_kb as f64 / 1024.0, rss_kb);
+        println!(
+            "  Prozess RSS:        {:.2} MB ({} KB)",
+            rss_kb as f64 / 1024.0,
+            rss_kb
+        );
     }
 }
 
@@ -275,7 +328,11 @@ fn populate_ui_from_config(
     ui.set_eco_mode(cfg.eco_mode);
     ui.set_autostart(cfg.autostart || is_autostart_enabled());
     ui.set_start_minimized(cfg.start_minimized);
-    ui.set_status_badge_text(SharedString::from(if active { "AKTIV" } else { "PAUSIERT" }));
+    ui.set_status_badge_text(SharedString::from(if active {
+        "AKTIV"
+    } else {
+        "PAUSIERT"
+    }));
 }
 
 fn read_config_from_ui(
@@ -333,34 +390,52 @@ fn read_config_from_ui(
     cfg
 }
 
-fn main() {
+fn main() -> ExitCode {
+    match run() {
+        Ok(()) => ExitCode::SUCCESS,
+        Err(err) => {
+            eprintln!("[GloWled] Fataler Fehler: {err}");
+            ExitCode::FAILURE
+        }
+    }
+}
+
+fn run() -> Result<()> {
     let flags = CliFlags::parse();
     if flags.version {
         println!("GloWled v{}", env!("CARGO_PKG_VERSION"));
-        return;
+        return Ok(());
     }
     if flags.benchmark {
         run_benchmark_mode();
-        return;
+        return Ok(());
     }
 
     let _instance_guard = match single_instance::acquire() {
         Some(guard) => guard,
-        None => return,
+        None => {
+            if !flags.autostart && !flags.minimized && !flags.headless {
+                single_instance::bring_existing_to_front();
+            }
+            return Ok(());
+        }
     };
 
     let mut cfg = load_config();
     cfg.sanitize();
-    if cfg.autostart {
-        let exe = get_current_executable_path();
-        if !exe.is_empty() {
-            let _ = set_autostart(true, Some(&exe));
+    let exe = get_current_executable_path();
+    if cfg.autostart && !exe.is_empty() {
+        let _ = set_autostart(true, Some(&exe));
+    }
+    if !exe.is_empty() && cfg.last_known_exe_path != exe {
+        cfg.last_known_exe_path = exe;
+        if get_config_file_path().exists() {
+            let _ = save_config(&cfg);
         }
     }
 
     if flags.headless {
-        run_headless_mode(cfg);
-        return;
+        return run_headless_mode(cfg);
     }
 
     let start_minimized = if flags.force_show {
@@ -369,13 +444,14 @@ fn main() {
         flags.autostart || flags.minimized || cfg.start_minimized
     };
 
-    let ui = SettingsWindow::new().expect("Failed to create Slint SettingsWindow");
+    let ui = SettingsWindow::new()
+        .map_err(|e| GlowledError::Ui(format!("SettingsWindow Initialisierung: {e}")))?;
     let displays = Rc::new(RefCell::new(enumerate_displays()));
     let cfg_state = Rc::new(RefCell::new(cfg.clone()));
     let active_state = Rc::new(Cell::new(true));
     let ui_visible = Rc::new(Cell::new(!start_minimized));
 
-    let worker = Rc::new(RefCell::new(WorkerHandle::spawn(cfg.clone(), true)));
+    let worker = Rc::new(RefCell::new(WorkerHandle::spawn(cfg.clone(), true)?));
     worker.borrow().set_ui_open(!start_minimized);
 
     let tray = match TrayManager::new(true) {
@@ -478,9 +554,8 @@ fn main() {
                     } else {
                         "Autostart aus Windows-Registry entfernt"
                     })),
-                    Err(e) => win.set_live_status_text(SharedString::from(format!(
-                        "Autostart-Fehler: {e}"
-                    ))),
+                    Err(e) => win
+                        .set_live_status_text(SharedString::from(format!("Autostart-Fehler: {e}"))),
                 }
             }
         });
@@ -526,9 +601,9 @@ fn main() {
                     new_cfg.port,
                     new_cfg.protocol.as_str()
                 ))),
-                Err(e) => win.set_live_status_text(SharedString::from(format!(
-                    "Speicherfehler: {e}"
-                ))),
+                Err(e) => {
+                    win.set_live_status_text(SharedString::from(format!("Speicherfehler: {e}")))
+                }
             }
         });
     }
@@ -612,9 +687,12 @@ fn main() {
     }
 
     if !start_minimized {
-        ui.show().expect("Failed to show GloWled settings window");
+        ui.show()
+            .map_err(|e| GlowledError::Ui(format!("Fenster konnte nicht angezeigt werden: {e}")))?;
     }
 
-    slint::run_event_loop_until_quit().expect("Slint event loop failed");
+    slint::run_event_loop_until_quit()
+        .map_err(|e| GlowledError::Ui(format!("Slint Event-Loop fehlgeschlagen: {e}")))?;
     worker.borrow_mut().stop();
+    Ok(())
 }

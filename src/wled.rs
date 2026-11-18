@@ -9,6 +9,7 @@ use crossbeam_channel::{bounded, unbounded, Receiver, Sender};
 
 use crate::capture::{create_capturer, CaptureStatus, FrameBuffer, PixelFormat, ScreenCapturer};
 use crate::config::{AppConfig, WledProtocol};
+use crate::error::{GlowledError, Result};
 use crate::processing::{
     process_monitor_frame_into, resolve_capture_resolution, ProcessingScratch, TemporalSmoother,
 };
@@ -49,7 +50,7 @@ pub fn build_warls_packet_into(rgb_bytes: &[u8], timeout_secs: u8, out: &mut Vec
     out.reserve(2 + led_count * 4);
     out.push(1);
     out.push(timeout_secs);
-    for (idx, chunk) in rgb_bytes.chunks_exact(3).take(255).enumerate() {
+    for (idx, chunk) in rgb_bytes.as_chunks::<3>().0.iter().take(255).enumerate() {
         out.push(idx as u8);
         out.push(chunk[0]);
         out.push(chunk[1]);
@@ -106,31 +107,37 @@ pub fn build_wled_packet(
 }
 
 /// Resolves `"ip:port"` to a `SocketAddr`.
-fn resolve_target(ip: &str, port: u16) -> Result<SocketAddr, String> {
-    let addr_str = format!("{}:{port}", ip.trim());
+fn resolve_target(ip: &str, port: u16) -> Result<SocketAddr> {
+    let trimmed = ip.trim();
+    if trimmed.is_empty() || port == 0 {
+        return Err(GlowledError::InvalidAddress {
+            addr: format!("{trimmed}:{port}"),
+            reason: "IP oder Port darf nicht leer bzw. 0 sein".to_string(),
+        });
+    }
+    let addr_str = format!("{trimmed}:{port}");
     addr_str
         .to_socket_addrs()
-        .map_err(|e| format!("Ungültige Adresse {addr_str}: {e}"))?
+        .map_err(|e| GlowledError::InvalidAddress {
+            addr: addr_str.clone(),
+            reason: e.to_string(),
+        })?
         .next()
-        .ok_or_else(|| format!("Konnte {addr_str} nicht auflösen"))
+        .ok_or_else(|| GlowledError::InvalidAddress {
+            addr: addr_str,
+            reason: "Keine aufgelöste Zieladresse gefunden".to_string(),
+        })
 }
 
 /// Tests UDP socket creation and sends a single black probe packet to WLED.
-pub fn test_wled_connection(
-    ip: &str,
-    port: u16,
-    protocol: WledProtocol,
-) -> Result<Duration, String> {
+pub fn test_wled_connection(ip: &str, port: u16, protocol: WledProtocol) -> Result<Duration> {
     let target = resolve_target(ip, port)?;
-    let sock =
-        UdpSocket::bind("0.0.0.0:0").map_err(|e| format!("UDP-Socket fehlgeschlagen: {e}"))?;
-    sock.set_write_timeout(Some(Duration::from_millis(1500)))
-        .map_err(|e| format!("Timeout-Konfiguration fehlgeschlagen: {e}"))?;
+    let sock = UdpSocket::bind("0.0.0.0:0")?;
+    sock.set_write_timeout(Some(Duration::from_millis(1500)))?;
 
     let probe = build_wled_packet(protocol, &[0, 0, 0], 2, 1);
     let start = Instant::now();
-    sock.send_to(&probe, target)
-        .map_err(|e| format!("UDP-Versand fehlgeschlagen: {e}"))?;
+    sock.send_to(&probe, target)?;
     Ok(start.elapsed())
 }
 
@@ -143,7 +150,7 @@ pub struct WorkerHandle {
 
 impl WorkerHandle {
     /// Spawns the background capture & streaming worker using the platform capturer.
-    pub fn spawn(initial_config: AppConfig, initial_active: bool) -> Self {
+    pub fn spawn(initial_config: AppConfig, initial_active: bool) -> Result<Self> {
         Self::spawn_with_factory(initial_config, initial_active, create_capturer)
     }
 
@@ -152,7 +159,7 @@ impl WorkerHandle {
         initial_config: AppConfig,
         initial_active: bool,
         factory: F,
-    ) -> Self
+    ) -> Result<Self>
     where
         F: Fn(usize) -> Box<dyn ScreenCapturer> + Send + 'static,
     {
@@ -164,13 +171,13 @@ impl WorkerHandle {
             .spawn(move || {
                 run_worker_loop(initial_config, initial_active, cmd_rx, event_tx, factory);
             })
-            .expect("Failed to spawn GloWled worker thread");
+            .map_err(GlowledError::WorkerSpawn)?;
 
-        Self {
+        Ok(Self {
             cmd_tx,
             event_rx,
             join_handle: Some(join_handle),
-        }
+        })
     }
 
     pub fn update_config(&self, cfg: AppConfig) {
@@ -211,11 +218,7 @@ fn sync_capturers<F>(
 ) where
     F: Fn(usize) -> Box<dyn ScreenCapturer>,
 {
-    let needed: Vec<usize> = cfg
-        .monitors
-        .iter()
-        .map(|m| m.mss_index.max(1))
-        .collect();
+    let needed: Vec<usize> = cfg.monitors.iter().map(|m| m.mss_index.max(1)).collect();
     capturers.retain(|idx, _| needed.contains(idx));
     last_frames.retain(|idx, _| needed.contains(idx));
     for idx in needed {
@@ -275,7 +278,13 @@ fn run_worker_loop<F>(
                     if let Some(addr) = target_addr {
                         if !current_rgb_bytes.is_empty() {
                             let zeros = vec![0u8; current_rgb_bytes.len()];
-                            build_wled_packet_into(cfg.protocol, &zeros, 2, ddp_seq, &mut packet_buf);
+                            build_wled_packet_into(
+                                cfg.protocol,
+                                &zeros,
+                                2,
+                                ddp_seq,
+                                &mut packet_buf,
+                            );
                             let _ = sock.send_to(&packet_buf, addr);
                         }
                     }
@@ -473,10 +482,7 @@ fn run_worker_loop<F>(
             }
 
             if ui_open {
-                let preview: Vec<[u8; 3]> = current_rgb_bytes
-                    .chunks_exact(3)
-                    .map(|c| [c[0], c[1], c[2]])
-                    .collect();
+                let preview: Vec<[u8; 3]> = current_rgb_bytes.as_chunks::<3>().0.to_vec();
                 let _ = event_tx.try_send(WorkerEvent::PreviewColors(preview));
             }
         }
@@ -580,14 +586,15 @@ mod tests {
                     top: 0,
                 }
             }
-            fn reset(&mut self) -> Result<(), String> {
+            fn reset(&mut self) -> Result<()> {
                 Ok(())
             }
         }
 
         let mut handle = WorkerHandle::spawn_with_factory(cfg, true, |_| {
             Box::new(SolidRedCapturer { calls: 0 })
-        });
+        })
+        .unwrap();
 
         let mut buf = [0u8; 1024];
         let (n, _) = recv_sock.recv_from(&mut buf).unwrap();

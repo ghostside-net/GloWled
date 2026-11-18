@@ -6,6 +6,8 @@ use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
 
+use crate::error::{GlowledError, Result};
+
 /// Supported WLED realtime UDP streaming protocols.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
@@ -117,9 +119,9 @@ impl Default for MonitorConfig {
 }
 
 impl MonitorConfig {
-    /// Recomputes `edge_order` and `edge_directions` from `start_corner` and `clockwise`.
-    pub fn sync_geometry_from_corner_and_direction(&mut self) {
-        let order = match (self.start_corner, self.clockwise) {
+    /// Returns the canonical 4-edge order for `(start_corner, clockwise)`.
+    pub const fn edge_order_for(start_corner: StartCorner, clockwise: bool) -> [&'static str; 4] {
+        match (start_corner, clockwise) {
             (StartCorner::BottomLeft, true) => [EDGE_LEFT, EDGE_TOP, EDGE_RIGHT, EDGE_BOTTOM],
             (StartCorner::BottomLeft, false) => [EDGE_BOTTOM, EDGE_RIGHT, EDGE_TOP, EDGE_LEFT],
             (StartCorner::TopLeft, true) => [EDGE_TOP, EDGE_RIGHT, EDGE_BOTTOM, EDGE_LEFT],
@@ -128,7 +130,12 @@ impl MonitorConfig {
             (StartCorner::TopRight, false) => [EDGE_TOP, EDGE_LEFT, EDGE_BOTTOM, EDGE_RIGHT],
             (StartCorner::BottomRight, true) => [EDGE_BOTTOM, EDGE_LEFT, EDGE_TOP, EDGE_RIGHT],
             (StartCorner::BottomRight, false) => [EDGE_RIGHT, EDGE_TOP, EDGE_LEFT, EDGE_BOTTOM],
-        };
+        }
+    }
+
+    /// Recomputes `edge_order` and `edge_directions` from `start_corner` and `clockwise`.
+    pub fn sync_geometry_from_corner_and_direction(&mut self) {
+        let order = Self::edge_order_for(self.start_corner, self.clockwise);
         self.edge_order = order.iter().map(|s| (*s).to_string()).collect();
 
         let (d_left, d_top, d_right, d_bottom) = if self.clockwise {
@@ -178,13 +185,10 @@ impl MonitorConfig {
             == -1
     }
 
-    /// Returns effective `(edge_order, edge_directions)` falling back to corner/direction if empty.
+    /// Returns effective `edge_order`, falling back to corner/direction when empty.
     pub fn effective_edge_order(&self) -> Vec<&str> {
         if self.edge_order.is_empty() {
-            let mut copy = self.clone();
-            copy.sync_geometry_from_corner_and_direction();
-            // Return static defaults matching BottomLeft clockwise when empty
-            vec![EDGE_LEFT, EDGE_TOP, EDGE_RIGHT, EDGE_BOTTOM]
+            Self::edge_order_for(self.start_corner, self.clockwise).to_vec()
         } else {
             self.edge_order.iter().map(|s| s.as_str()).collect()
         }
@@ -242,6 +246,14 @@ impl Default for AppConfig {
     }
 }
 
+fn clamp_finite(val: f32, min: f32, max: f32, default: f32) -> f32 {
+    if val.is_finite() {
+        val.clamp(min, max)
+    } else {
+        default
+    }
+}
+
 impl AppConfig {
     /// Clamps numeric fields to safe operating ranges.
     pub fn sanitize(&mut self) {
@@ -254,18 +266,18 @@ impl AppConfig {
             self.port = 21324;
         }
         self.fps = self.fps.clamp(1, 120);
-        self.brightness = self.brightness.clamp(0.05, 3.0);
-        self.saturation = self.saturation.clamp(0.0, 3.0);
-        self.gamma = self.gamma.clamp(0.5, 4.0);
+        self.brightness = clamp_finite(self.brightness, 0.05, 3.0, 1.0);
+        self.saturation = clamp_finite(self.saturation, 0.0, 3.0, 1.0);
+        self.gamma = clamp_finite(self.gamma, 0.5, 4.0, 1.0);
         for c in &mut self.white_balance {
-            *c = c.clamp(0.1, 2.0);
+            *c = clamp_finite(*c, 0.1, 2.0, 1.0);
         }
-        self.smoothing = self.smoothing.clamp(0.0, 0.95);
-        if self.edge_depth < 0.0 {
+        self.smoothing = clamp_finite(self.smoothing, 0.0, 0.95, 0.1);
+        if !self.edge_depth.is_finite() || self.edge_depth < 0.0 {
             self.edge_depth = 0.08;
         }
-        self.black_threshold = self.black_threshold.clamp(0.0, 255.0);
-        self.oversample_factor = self.oversample_factor.clamp(1.0, 8.0);
+        self.black_threshold = clamp_finite(self.black_threshold, 0.0, 255.0, 15.0);
+        self.oversample_factor = clamp_finite(self.oversample_factor, 1.0, 8.0, 2.0);
         if self.monitors.is_empty() {
             self.monitors.push(MonitorConfig::default());
         }
@@ -348,20 +360,24 @@ pub fn load_config() -> AppConfig {
 }
 
 /// Saves configuration to `path`, creating parent directories as needed.
-pub fn save_config_to_path(cfg: &AppConfig, path: &Path) -> Result<(), String> {
+pub fn save_config_to_path(cfg: &AppConfig, path: &Path) -> Result<()> {
     if let Some(parent) = path.parent() {
-        fs::create_dir_all(parent)
-            .map_err(|e| format!("Failed to create directory {}: {e}", parent.display()))?;
+        fs::create_dir_all(parent).map_err(|source| GlowledError::ConfigDirCreate {
+            path: parent.to_path_buf(),
+            source,
+        })?;
     }
     let mut sanitized = cfg.clone();
     sanitized.sanitize();
-    let json = serde_json::to_string_pretty(&sanitized)
-        .map_err(|e| format!("Failed to serialize config: {e}"))?;
-    fs::write(path, json).map_err(|e| format!("Failed to write {}: {e}", path.display()))
+    let json = serde_json::to_string_pretty(&sanitized)?;
+    fs::write(path, json).map_err(|source| GlowledError::ConfigWrite {
+        path: path.to_path_buf(),
+        source,
+    })
 }
 
 /// Saves configuration to the active `config.json` path.
-pub fn save_config(cfg: &AppConfig) -> Result<(), String> {
+pub fn save_config(cfg: &AppConfig) -> Result<()> {
     save_config_to_path(cfg, &get_config_file_path())
 }
 
@@ -382,9 +398,31 @@ pub const WIN_RUN_KEY_PATH: &str = r"Software\Microsoft\Windows\CurrentVersion\R
 /// Windows Registry value name for GloWled autostart.
 pub const WIN_RUN_VALUE_NAME: &str = "GloWled";
 
+/// Removes legacy Python v1.x VBScript startup entries if present on Windows.
+#[cfg(windows)]
+fn cleanup_legacy_startup_vbs() {
+    if let Ok(appdata) = std::env::var("APPDATA") {
+        if appdata.is_empty() {
+            return;
+        }
+        let startup_dir = PathBuf::from(appdata)
+            .join("Microsoft")
+            .join("Windows")
+            .join("Start Menu")
+            .join("Programs")
+            .join("Startup");
+        for legacy_name in ["GloWled.vbs", "AmbilightController.vbs"] {
+            let candidate = startup_dir.join(legacy_name);
+            if candidate.exists() {
+                let _ = fs::remove_file(candidate);
+            }
+        }
+    }
+}
+
 /// Enables or disables autostart via Windows Registry (`HKCU\Software\Microsoft\Windows\CurrentVersion\Run`)
 /// on Windows, or a marker file in the config directory on non-Windows targets.
-pub fn set_autostart(enable: bool, exe_path: Option<&str>) -> Result<(), String> {
+pub fn set_autostart(enable: bool, exe_path: Option<&str>) -> Result<()> {
     #[cfg(windows)]
     {
         use winreg::enums::{HKEY_CURRENT_USER, KEY_SET_VALUE};
@@ -393,7 +431,11 @@ pub fn set_autostart(enable: bool, exe_path: Option<&str>) -> Result<(), String>
         let hkcu = RegKey::predef(HKEY_CURRENT_USER);
         let (run_key, _) = hkcu
             .create_subkey_with_flags(WIN_RUN_KEY_PATH, KEY_SET_VALUE)
-            .map_err(|e| format!("Failed to open HKCU\\{WIN_RUN_KEY_PATH}: {e}"))?;
+            .map_err(|e| {
+                GlowledError::Autostart(format!(
+                    "HKCU\\{WIN_RUN_KEY_PATH} öffnen fehlgeschlagen: {e}"
+                ))
+            })?;
 
         if enable {
             let owned;
@@ -405,16 +447,21 @@ pub fn set_autostart(enable: bool, exe_path: Option<&str>) -> Result<(), String>
                 }
             };
             let cmd = format_autostart_command(resolved);
-            run_key
-                .set_value(WIN_RUN_VALUE_NAME, &cmd)
-                .map_err(|e| format!("Failed to write registry autostart value: {e}"))?;
+            run_key.set_value(WIN_RUN_VALUE_NAME, &cmd).map_err(|e| {
+                GlowledError::Autostart(format!("Registry-Wert schreiben fehlgeschlagen: {e}"))
+            })?;
         } else {
             match run_key.delete_value(WIN_RUN_VALUE_NAME) {
                 Ok(()) => {}
                 Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
-                Err(e) => return Err(format!("Failed to remove registry autostart value: {e}")),
+                Err(e) => {
+                    return Err(GlowledError::Autostart(format!(
+                        "Registry-Wert löschen fehlgeschlagen: {e}"
+                    )))
+                }
             }
         }
+        cleanup_legacy_startup_vbs();
         Ok(())
     }
 
@@ -431,14 +478,17 @@ pub fn set_autostart(enable: bool, exe_path: Option<&str>) -> Result<(), String>
                 }
             };
             if let Some(parent) = marker.parent() {
-                fs::create_dir_all(parent)
-                    .map_err(|e| format!("Failed to create autostart dir: {e}"))?;
+                fs::create_dir_all(parent).map_err(|e| {
+                    GlowledError::Autostart(format!("Autostart-Verzeichnis fehlgeschlagen: {e}"))
+                })?;
             }
-            fs::write(&marker, format_autostart_command(resolved))
-                .map_err(|e| format!("Failed to write autostart marker: {e}"))?;
+            fs::write(&marker, format_autostart_command(resolved)).map_err(|e| {
+                GlowledError::Autostart(format!("Autostart-Marker schreiben fehlgeschlagen: {e}"))
+            })?;
         } else if marker.exists() {
-            fs::remove_file(&marker)
-                .map_err(|e| format!("Failed to remove autostart marker: {e}"))?;
+            fs::remove_file(&marker).map_err(|e| {
+                GlowledError::Autostart(format!("Autostart-Marker entfernen fehlgeschlagen: {e}"))
+            })?;
         }
         Ok(())
     }
@@ -453,7 +503,7 @@ pub fn is_autostart_enabled() -> bool {
 
         let hkcu = RegKey::predef(HKEY_CURRENT_USER);
         if let Ok(run_key) = hkcu.open_subkey_with_flags(WIN_RUN_KEY_PATH, KEY_READ) {
-            let val: Result<String, _> = run_key.get_value(WIN_RUN_VALUE_NAME);
+            let val: std::io::Result<String> = run_key.get_value(WIN_RUN_VALUE_NAME);
             return val.map(|s| !s.trim().is_empty()).unwrap_or(false);
         }
         false

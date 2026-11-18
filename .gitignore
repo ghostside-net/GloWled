@@ -1,47 +1,17 @@
-# Byte-compiled / optimized / DLL files
-# C extensions
-# Distribution / packaging
-# PyInstaller
-# Rust build artifacts
+# Rust / Cargo build artifacts (Cargo.lock is tracked for binary reproducibility)
 /target/
-# Virtual Environments
+**/*.rs.bk
+*.pdb
+
 # IDE & Editors
-# Testing & Coverage
-# Local logs & environment
-__pycache__/
-*.py[cod]
-*$py.class
-*.so
-build/
-dist/
-downloads/
-eggs/
-.eggs/
-lib/
-lib64/
-parts/
-sdist/
-var/
-wheels/
-share/python-wheels/
-*.egg-info/
-.installed.cfg
-*.egg
-MANIFEST
-*.manifest
-*.spec
-.venv/
-venv/
-ENV/
-env/
 .idea/
 .vscode/
 *.swp
 *.swo
 *~
-.pytest_cache/
-.mypy_cache/
-.coverage
-htmlcov/
+
+# OS & Local environment
+.DS_Store
+Thumbs.db
 *.log
 .env

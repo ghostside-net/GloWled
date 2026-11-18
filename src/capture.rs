@@ -1,6 +1,10 @@
 //! Screen capture abstraction, Windows DXGI Desktop Duplication with GDI fallback,
 //! and resilient error recovery (standby, resolution changes, UAC, fullscreen games).
 
+#[cfg(windows)]
+use crate::error::GlowledError;
+use crate::error::Result;
+
 /// Pixel layout of a captured frame buffer.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum PixelFormat {
@@ -84,11 +88,12 @@ pub trait ScreenCapturer: Send {
     fn display_info(&self) -> DisplayInfo;
 
     /// Re-initializes the capture session after resolution change, standby, or access loss.
-    fn reset(&mut self) -> Result<(), String>;
+    fn reset(&mut self) -> Result<()>;
 }
 
 /// Downsamples a raw mapped surface (`src_format`) directly into a compact `Rgb8` `FrameBuffer`
 /// using fast bilinear-like grid sampling so 4K captures never allocate 33 MB heap buffers.
+#[allow(clippy::too_many_arguments)]
 pub fn downsample_raw_into_rgb8(
     src: &[u8],
     src_stride: usize,
@@ -182,7 +187,7 @@ pub fn create_capturer(monitor_index: usize) -> Box<dyn ScreenCapturer> {
         if let Ok(dxgi) = win_backend::DxgiCapturer::new(monitor_index) {
             return Box::new(dxgi);
         }
-        return Box::new(win_backend::GdiCapturer::new(monitor_index));
+        Box::new(win_backend::GdiCapturer::new(monitor_index))
     }
 
     #[cfg(not(windows))]
@@ -232,7 +237,7 @@ impl ScreenCapturer for FallbackCapturer {
     ) -> CaptureStatus {
         self.frame_counter = self.frame_counter.wrapping_add(1);
         if let Some(period) = self.simulate_device_lost_every {
-            if self.frame_counter % period == 0 {
+            if self.frame_counter.is_multiple_of(period) {
                 self.first_sent = false;
                 return CaptureStatus::DeviceLost("Simulated display reset / standby".to_string());
             }
@@ -258,7 +263,7 @@ impl ScreenCapturer for FallbackCapturer {
         self.info.clone()
     }
 
-    fn reset(&mut self) -> Result<(), String> {
+    fn reset(&mut self) -> Result<()> {
         self.first_sent = false;
         Ok(())
     }
@@ -280,9 +285,8 @@ mod win_backend {
     use windows::Win32::Graphics::Dxgi::Common::{DXGI_FORMAT_B8G8R8A8_UNORM, DXGI_SAMPLE_DESC};
     use windows::Win32::Graphics::Dxgi::{
         CreateDXGIFactory1, IDXGIAdapter1, IDXGIFactory1, IDXGIOutput1, IDXGIOutputDuplication,
-        IDXGIResource, DXGI_ERROR_ACCESS_LOST, DXGI_ERROR_DEVICE_REMOVED,
-        DXGI_ERROR_DEVICE_RESET, DXGI_ERROR_INVALID_CALL, DXGI_ERROR_WAIT_TIMEOUT,
-        DXGI_OUTDUPL_FRAME_INFO,
+        IDXGIResource, DXGI_ERROR_ACCESS_LOST, DXGI_ERROR_DEVICE_REMOVED, DXGI_ERROR_DEVICE_RESET,
+        DXGI_ERROR_INVALID_CALL, DXGI_ERROR_WAIT_TIMEOUT, DXGI_OUTDUPL_FRAME_INFO,
     };
     use windows::Win32::Graphics::Gdi::{
         BitBlt, CreateCompatibleBitmap, CreateCompatibleDC, DeleteDC, DeleteObject, GetDC,
@@ -312,8 +316,11 @@ mod win_backend {
                         let height = (rect.bottom - rect.top).max(0) as u32;
                         if width > 0 && height > 0 {
                             let raw_name = String::from_utf16_lossy(
-                                &desc.DeviceName
-                                    [..desc.DeviceName.iter().position(|&c| c == 0).unwrap_or(0)],
+                                &desc.DeviceName[..desc
+                                    .DeviceName
+                                    .iter()
+                                    .position(|&c| c == 0)
+                                    .unwrap_or(desc.DeviceName.len())],
                             );
                             let name = if raw_name.is_empty() {
                                 format!("Monitor {global_idx}")
@@ -355,8 +362,15 @@ mod win_backend {
     // COM objects created on the worker thread stay on the worker thread.
     unsafe impl Send for DxgiCapturer {}
 
+    fn dxgi_err(msg: impl Into<String>) -> GlowledError {
+        GlowledError::Capture {
+            backend: "DXGI",
+            message: msg.into(),
+        }
+    }
+
     impl DxgiCapturer {
-        pub fn new(monitor_index: usize) -> Result<Self, String> {
+        pub fn new(monitor_index: usize) -> Result<Self> {
             let mut capturer = Self {
                 monitor_index: monitor_index.max(1),
                 info: DisplayInfo {
@@ -390,11 +404,11 @@ mod win_backend {
             self.has_initial_frame = false;
         }
 
-        fn init_duplication(&mut self) -> Result<(), String> {
+        fn init_duplication(&mut self) -> Result<()> {
             self.release_dxgi();
             unsafe {
                 let factory: IDXGIFactory1 = CreateDXGIFactory1()
-                    .map_err(|e| format!("CreateDXGIFactory1 failed: {e:?}"))?;
+                    .map_err(|e| dxgi_err(format!("CreateDXGIFactory1 failed: {e:?}")))?;
 
                 let target_zero_based = self.monitor_index.saturating_sub(1);
                 let mut current_idx = 0usize;
@@ -434,7 +448,7 @@ mod win_backend {
                 }
 
                 let (adapter, output1, info) =
-                    chosen.ok_or_else(|| "No active DXGI display output found".to_string())?;
+                    chosen.ok_or_else(|| dxgi_err("No active DXGI display output found"))?;
                 self.info = info;
 
                 let feature_levels = [D3D_FEATURE_LEVEL_11_1, D3D_FEATURE_LEVEL_11_0];
@@ -451,13 +465,13 @@ mod win_backend {
                     None,
                     Some(&mut context),
                 )
-                .map_err(|e| format!("D3D11CreateDevice failed: {e:?}"))?;
+                .map_err(|e| dxgi_err(format!("D3D11CreateDevice failed: {e:?}")))?;
 
-                let device = device.ok_or_else(|| "D3D11 device was None".to_string())?;
-                let context = context.ok_or_else(|| "D3D11 context was None".to_string())?;
+                let device = device.ok_or_else(|| dxgi_err("D3D11 device was None"))?;
+                let context = context.ok_or_else(|| dxgi_err("D3D11 context was None"))?;
                 let duplication = output1
                     .DuplicateOutput(&device)
-                    .map_err(|e| format!("DuplicateOutput failed: {e:?}"))?;
+                    .map_err(|e| dxgi_err(format!("DuplicateOutput failed: {e:?}")))?;
 
                 self.device = Some(device);
                 self.context = Some(context);
@@ -466,14 +480,14 @@ mod win_backend {
             }
         }
 
-        fn ensure_staging_texture(&mut self, width: u32, height: u32) -> Result<(), String> {
+        fn ensure_staging_texture(&mut self, width: u32, height: u32) -> Result<()> {
             if self.staging.is_some() && self.staging_w == width && self.staging_h == height {
                 return Ok(());
             }
             let device = self
                 .device
                 .as_ref()
-                .ok_or_else(|| "Missing D3D11 device".to_string())?;
+                .ok_or_else(|| dxgi_err("Missing D3D11 device"))?;
             let desc = D3D11_TEXTURE2D_DESC {
                 Width: width,
                 Height: height,
@@ -493,7 +507,7 @@ mod win_backend {
                 let mut tex = None;
                 device
                     .CreateTexture2D(&desc, None, Some(&mut tex))
-                    .map_err(|e| format!("CreateTexture2D staging failed: {e:?}"))?;
+                    .map_err(|e| dxgi_err(format!("CreateTexture2D staging failed: {e:?}")))?;
                 self.staging = tex;
                 self.staging_w = width;
                 self.staging_h = height;
@@ -573,7 +587,7 @@ mod win_backend {
                 }
 
                 if let Err(e) = self.ensure_staging_texture(src_w, src_h) {
-                    return CaptureStatus::Error(e);
+                    return CaptureStatus::Error(e.to_string());
                 }
                 let Some(context) = self.context.as_ref() else {
                     return CaptureStatus::DeviceLost("Missing D3D11 context".into());
@@ -632,7 +646,7 @@ mod win_backend {
             self.info.clone()
         }
 
-        fn reset(&mut self) -> Result<(), String> {
+        fn reset(&mut self) -> Result<()> {
             match self.init_duplication() {
                 Ok(()) => {
                     self.gdi_fallback = None;
@@ -643,6 +657,45 @@ mod win_backend {
                     self.gdi_fallback = Some(GdiCapturer::new(self.monitor_index));
                     Err(dxgi_err)
                 }
+            }
+        }
+    }
+
+    struct ScreenDcGuard(windows::Win32::Graphics::Gdi::HDC);
+    impl Drop for ScreenDcGuard {
+        fn drop(&mut self) {
+            unsafe {
+                let _ = ReleaseDC(None, self.0);
+            }
+        }
+    }
+
+    struct MemDcGuard(windows::Win32::Graphics::Gdi::HDC);
+    impl Drop for MemDcGuard {
+        fn drop(&mut self) {
+            unsafe {
+                let _ = DeleteDC(self.0);
+            }
+        }
+    }
+
+    struct BitmapGuard(windows::Win32::Graphics::Gdi::HBITMAP);
+    impl Drop for BitmapGuard {
+        fn drop(&mut self) {
+            unsafe {
+                let _ = DeleteObject(self.0);
+            }
+        }
+    }
+
+    struct SelectedObjGuard(
+        windows::Win32::Graphics::Gdi::HDC,
+        windows::Win32::Graphics::Gdi::HGDIOBJ,
+    );
+    impl Drop for SelectedObjGuard {
+        fn drop(&mut self) {
+            unsafe {
+                SelectObject(self.0, self.1);
             }
         }
     }
@@ -698,19 +751,22 @@ mod win_backend {
                 if hdc_screen.is_invalid() {
                     return CaptureStatus::DeviceLost("GetDC(NULL) failed".into());
                 }
+                let _screen_guard = ScreenDcGuard(hdc_screen);
+
                 let hdc_mem = CreateCompatibleDC(hdc_screen);
                 if hdc_mem.is_invalid() {
-                    let _ = ReleaseDC(None, hdc_screen);
                     return CaptureStatus::DeviceLost("CreateCompatibleDC failed".into());
                 }
+                let _mem_guard = MemDcGuard(hdc_mem);
+
                 let hbm = CreateCompatibleBitmap(hdc_screen, w, h);
                 if hbm.is_invalid() {
-                    let _ = DeleteDC(hdc_mem);
-                    let _ = ReleaseDC(None, hdc_screen);
                     return CaptureStatus::DeviceLost("CreateCompatibleBitmap failed".into());
                 }
+                let _bmp_guard = BitmapGuard(hbm);
 
                 let old_obj = SelectObject(hdc_mem, hbm);
+                let _sel_guard = SelectedObjGuard(hdc_mem, old_obj);
                 let ok = BitBlt(
                     hdc_mem,
                     0,
@@ -760,11 +816,6 @@ mod win_backend {
                     }
                 }
 
-                SelectObject(hdc_mem, old_obj);
-                let _ = DeleteObject(hbm);
-                let _ = DeleteDC(hdc_mem);
-                let _ = ReleaseDC(None, hdc_screen);
-
                 if ok {
                     CaptureStatus::NewFrame
                 } else {
@@ -777,7 +828,7 @@ mod win_backend {
             self.info.clone()
         }
 
-        fn reset(&mut self) -> Result<(), String> {
+        fn reset(&mut self) -> Result<()> {
             *self = Self::new(self.info.index);
             Ok(())
         }

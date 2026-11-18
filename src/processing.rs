@@ -115,8 +115,8 @@ impl TemporalSmoother {
             for (i, prev) in self.prev_pixels.iter().enumerate() {
                 let base = i * 3;
                 for c in 0..3 {
-                    let blended = s * (prev[c] as f32)
-                        + one_minus_s * (current_rgb_bytes[base + c] as f32);
+                    let blended =
+                        s * (prev[c] as f32) + one_minus_s * (current_rgb_bytes[base + c] as f32);
                     current_rgb_bytes[base + c] = blended.clamp(0.0, 255.0) as u8;
                 }
             }
@@ -280,7 +280,12 @@ pub fn calculate_segment_rois(
                 let x1 = (((i as f64) * (width as f64)) / (num_leds as f64)).round() as u32;
                 let x2 = ((((i + 1) as f64) * (width as f64)) / (num_leds as f64)).round() as u32;
                 let seg_w = x2.saturating_sub(x1).max(1);
-                rois.push(Roi { x: x1, y, w: seg_w, h });
+                rois.push(Roi {
+                    x: x1,
+                    y,
+                    w: seg_w,
+                    h,
+                });
             }
         }
         EDGE_LEFT | EDGE_RIGHT => {
@@ -294,7 +299,12 @@ pub fn calculate_segment_rois(
                 let y1 = (((i as f64) * (height as f64)) / (num_leds as f64)).round() as u32;
                 let y2 = ((((i + 1) as f64) * (height as f64)) / (num_leds as f64)).round() as u32;
                 let seg_h = y2.saturating_sub(y1).max(1);
-                rois.push(Roi { x, y: y1, w, h: seg_h });
+                rois.push(Roi {
+                    x,
+                    y: y1,
+                    w,
+                    h: seg_h,
+                });
             }
         }
         _ => {}
@@ -314,7 +324,9 @@ pub fn detect_black_bars(rgb: &[u8], width: u32, height: u32, threshold: u8) -> 
 
     let is_row_black = |y: usize| -> bool {
         let row = &rgb[y * w * 3..(y + 1) * w * 3];
-        row.chunks_exact(3)
+        row.as_chunks::<3>()
+            .0
+            .iter()
             .all(|p| p[0].max(p[1]).max(p[2]) <= threshold)
     };
 
@@ -385,6 +397,48 @@ pub fn detect_black_bars(rgb: &[u8], width: u32, height: u32, threshold: u8) -> 
     }
 }
 
+fn normalize_threshold_value(val: f32) -> f32 {
+    if !val.is_finite() {
+        return 0.0;
+    }
+    if val > 0.0 && val < 1.0 {
+        val * 255.0
+    } else {
+        val
+    }
+}
+
+fn compute_black_threshold_params(
+    threshold: f32,
+    transition_range: Option<f32>,
+) -> Option<(f32, f32, f32)> {
+    let thresh = normalize_threshold_value(threshold).clamp(0.0, 255.0);
+    if thresh <= 0.0 {
+        return None;
+    }
+    let trans_w = match transition_range {
+        None => thresh.clamp(4.0, 30.0),
+        Some(r) => normalize_threshold_value(r).max(1.0),
+    };
+    let knee = (thresh + trans_w).min(255.0);
+    let denom = (knee - thresh).max(1e-5);
+    Some((thresh, knee, denom))
+}
+
+#[inline]
+fn attenuate_rgb_pixel(px: &mut [u8; 3], thresh: f32, knee: f32, denom: f32) {
+    let intensity = px[0].max(px[1]).max(px[2]) as f32;
+    if intensity <= thresh {
+        *px = [0, 0, 0];
+    } else if intensity < knee {
+        let t = (intensity - thresh) / denom;
+        let factor = t * t * (3.0 - 2.0 * t);
+        px[0] = ((px[0] as f32) * factor).round().clamp(0.0, 255.0) as u8;
+        px[1] = ((px[1] as f32) * factor).round().clamp(0.0, 255.0) as u8;
+        px[2] = ((px[2] as f32) * factor).round().clamp(0.0, 255.0) as u8;
+    }
+}
+
 /// Applies black level cutoff with Hermite smoothstep fade-out (`3*t^2 - 2*t^3`)
 /// on max channel intensity `max(R, G, B)`.
 pub fn apply_black_level_threshold(
@@ -395,38 +449,12 @@ pub fn apply_black_level_threshold(
     if pixels.is_empty() {
         return;
     }
-    let thresh = if threshold > 0.0 && threshold <= 1.0 {
-        threshold * 255.0
-    } else {
-        threshold
-    }
-    .clamp(0.0, 255.0);
-
-    if thresh <= 0.0 {
+    let Some((thresh, knee, denom)) = compute_black_threshold_params(threshold, transition_range)
+    else {
         return;
-    }
-
-    let trans_w = match transition_range {
-        None => thresh.clamp(4.0, 30.0),
-        Some(r) => {
-            let scaled = if r > 0.0 && r <= 1.0 { r * 255.0 } else { r };
-            scaled.max(1.0)
-        }
     };
-    let knee = (thresh + trans_w).min(255.0);
-    let denom = (knee - thresh).max(1e-5);
-
     for px in pixels.iter_mut() {
-        let intensity = px[0].max(px[1]).max(px[2]) as f32;
-        if intensity <= thresh {
-            *px = [0, 0, 0];
-        } else if intensity < knee {
-            let t = (intensity - thresh) / denom;
-            let factor = t * t * (3.0 - 2.0 * t);
-            px[0] = ((px[0] as f32) * factor).round().clamp(0.0, 255.0) as u8;
-            px[1] = ((px[1] as f32) * factor).round().clamp(0.0, 255.0) as u8;
-            px[2] = ((px[2] as f32) * factor).round().clamp(0.0, 255.0) as u8;
-        }
+        attenuate_rgb_pixel(px, thresh, knee, denom);
     }
 }
 
@@ -436,39 +464,15 @@ pub fn apply_black_level_threshold_bytes(
     threshold: f32,
     transition_range: Option<f32>,
 ) {
-    let thresh = if threshold > 0.0 && threshold <= 1.0 {
-        threshold * 255.0
-    } else {
-        threshold
-    }
-    .clamp(0.0, 255.0);
-    if thresh <= 0.0 || rgb_bytes.len() < 3 {
+    if rgb_bytes.len() < 3 {
         return;
     }
-
-    let trans_w = match transition_range {
-        None => thresh.clamp(4.0, 30.0),
-        Some(r) => {
-            let scaled = if r > 0.0 && r <= 1.0 { r * 255.0 } else { r };
-            scaled.max(1.0)
-        }
+    let Some((thresh, knee, denom)) = compute_black_threshold_params(threshold, transition_range)
+    else {
+        return;
     };
-    let knee = (thresh + trans_w).min(255.0);
-    let denom = (knee - thresh).max(1e-5);
-
-    for px in rgb_bytes.chunks_exact_mut(3) {
-        let intensity = px[0].max(px[1]).max(px[2]) as f32;
-        if intensity <= thresh {
-            px[0] = 0;
-            px[1] = 0;
-            px[2] = 0;
-        } else if intensity < knee {
-            let t = (intensity - thresh) / denom;
-            let factor = t * t * (3.0 - 2.0 * t);
-            px[0] = ((px[0] as f32) * factor).round().clamp(0.0, 255.0) as u8;
-            px[1] = ((px[1] as f32) * factor).round().clamp(0.0, 255.0) as u8;
-            px[2] = ((px[2] as f32) * factor).round().clamp(0.0, 255.0) as u8;
-        }
+    for px in rgb_bytes.as_chunks_mut::<3>().0 {
+        attenuate_rgb_pixel(px, thresh, knee, denom);
     }
 }
 
@@ -557,7 +561,10 @@ fn downscale_and_correct_into_thumb(
     let sw = frame.width as usize;
     let sh = frame.height as usize;
     let bpp = frame.format.bytes_per_pixel();
-    let expected_len = sw * sh * bpp;
+    let Some(expected_len) = sw.checked_mul(sh).and_then(|v| v.checked_mul(bpp)) else {
+        scratch.thumb_rgb.fill(0);
+        return;
+    };
     if frame.data.len() < expected_len {
         scratch.thumb_rgb.fill(0);
         return;
@@ -627,55 +634,79 @@ fn downscale_and_correct_into_thumb(
     }
 }
 
+struct EdgeSamplingRegion {
+    w: u32,
+    h: u32,
+    edge_depth: f32,
+    bars: BlackBarInsets,
+}
+
 /// Computes area-averaged RGB values for `num_leds` along a single edge from `thumb_rgb`.
 fn sample_edge_area_averages(
     thumb_rgb: &[u8],
-    w: u32,
-    h: u32,
+    region: &EdgeSamplingRegion,
     edge: &str,
     num_leds: usize,
-    edge_depth: f32,
-    bars: BlackBarInsets,
     out_pixels: &mut Vec<[u8; 3]>,
 ) {
     out_pixels.clear();
+    let w = region.w;
+    let h = region.h;
     if num_leds == 0 || w == 0 || h == 0 {
         return;
     }
 
-    let active_x0 = bars.left.min(w.saturating_sub(1));
-    let active_x1 = w.saturating_sub(bars.right).max(active_x0 + 1);
-    let active_y0 = bars.top.min(h.saturating_sub(1));
-    let active_y1 = h.saturating_sub(bars.bottom).max(active_y0 + 1);
+    let active_x0 = region.bars.left.min(w.saturating_sub(1));
+    let active_x1 = w.saturating_sub(region.bars.right).max(active_x0 + 1);
+    let active_y0 = region.bars.top.min(h.saturating_sub(1));
+    let active_y1 = h.saturating_sub(region.bars.bottom).max(active_y0 + 1);
     let active_w = active_x1 - active_x0;
     let active_h = active_y1 - active_y0;
 
-    let depth_x = calculate_edge_depth_pixels(active_w, edge_depth, 0.5, 1);
-    let depth_y = calculate_edge_depth_pixels(active_h, edge_depth, 0.5, 1);
+    let depth_x = calculate_edge_depth_pixels(active_w, region.edge_depth, 0.5, 1);
+    let depth_y = calculate_edge_depth_pixels(active_h, region.edge_depth, 0.5, 1);
 
     let stride_w = w as usize;
 
     for i in 0..num_leds {
         let (rx0, ry0, rx1, ry1) = match edge {
             EDGE_TOP => {
-                let x1 = active_x0 + (((i as f64) * (active_w as f64)) / (num_leds as f64)).round() as u32;
-                let x2 = active_x0 + ((((i + 1) as f64) * (active_w as f64)) / (num_leds as f64)).round() as u32;
-                (x1, active_y0, x2.max(x1 + 1).min(active_x1), (active_y0 + depth_y).min(active_y1))
+                let x1 = active_x0
+                    + (((i as f64) * (active_w as f64)) / (num_leds as f64)).round() as u32;
+                let x2 = active_x0
+                    + ((((i + 1) as f64) * (active_w as f64)) / (num_leds as f64)).round() as u32;
+                (
+                    x1,
+                    active_y0,
+                    x2.max(x1 + 1).min(active_x1),
+                    (active_y0 + depth_y).min(active_y1),
+                )
             }
             EDGE_BOTTOM => {
-                let x1 = active_x0 + (((i as f64) * (active_w as f64)) / (num_leds as f64)).round() as u32;
-                let x2 = active_x0 + ((((i + 1) as f64) * (active_w as f64)) / (num_leds as f64)).round() as u32;
+                let x1 = active_x0
+                    + (((i as f64) * (active_w as f64)) / (num_leds as f64)).round() as u32;
+                let x2 = active_x0
+                    + ((((i + 1) as f64) * (active_w as f64)) / (num_leds as f64)).round() as u32;
                 let y0 = active_y1.saturating_sub(depth_y).max(active_y0);
                 (x1, y0, x2.max(x1 + 1).min(active_x1), active_y1)
             }
             EDGE_LEFT => {
-                let y1 = active_y0 + (((i as f64) * (active_h as f64)) / (num_leds as f64)).round() as u32;
-                let y2 = active_y0 + ((((i + 1) as f64) * (active_h as f64)) / (num_leds as f64)).round() as u32;
-                (active_x0, y1, (active_x0 + depth_x).min(active_x1), y2.max(y1 + 1).min(active_y1))
+                let y1 = active_y0
+                    + (((i as f64) * (active_h as f64)) / (num_leds as f64)).round() as u32;
+                let y2 = active_y0
+                    + ((((i + 1) as f64) * (active_h as f64)) / (num_leds as f64)).round() as u32;
+                (
+                    active_x0,
+                    y1,
+                    (active_x0 + depth_x).min(active_x1),
+                    y2.max(y1 + 1).min(active_y1),
+                )
             }
             EDGE_RIGHT => {
-                let y1 = active_y0 + (((i as f64) * (active_h as f64)) / (num_leds as f64)).round() as u32;
-                let y2 = active_y0 + ((((i + 1) as f64) * (active_h as f64)) / (num_leds as f64)).round() as u32;
+                let y1 = active_y0
+                    + (((i as f64) * (active_h as f64)) / (num_leds as f64)).round() as u32;
+                let y2 = active_y0
+                    + ((((i + 1) as f64) * (active_h as f64)) / (num_leds as f64)).round() as u32;
                 let x0 = active_x1.saturating_sub(depth_x).max(active_x0);
                 (x0, y1, active_x1, y2.max(y1 + 1).min(active_y1))
             }
@@ -698,15 +729,15 @@ fn sample_edge_area_averages(
             }
         }
 
-        if count > 0 {
-            out_pixels.push([
-                (sum_r / count) as u8,
-                (sum_g / count) as u8,
-                (sum_b / count) as u8,
-            ]);
-        } else {
-            out_pixels.push([0, 0, 0]);
-        }
+        let px = match (
+            sum_r.checked_div(count),
+            sum_g.checked_div(count),
+            sum_b.checked_div(count),
+        ) {
+            (Some(r), Some(g), Some(b)) => [r as u8, g as u8, b as u8],
+            _ => [0, 0, 0],
+        };
+        out_pixels.push(px);
     }
 }
 
@@ -742,14 +773,19 @@ pub fn process_monitor_frame_into(
     );
 
     let bars = if black_bar_detection {
-        let thresh_u8 = if black_threshold > 0.0 && black_threshold <= 1.0 {
-            (black_threshold * 255.0).round() as u8
-        } else {
-            black_threshold.round().clamp(0.0, 255.0) as u8
-        };
+        let thresh_u8 = normalize_threshold_value(black_threshold)
+            .round()
+            .clamp(0.0, 255.0) as u8;
         detect_black_bars(&scratch.thumb_rgb, eff_w, eff_h, thresh_u8)
     } else {
         BlackBarInsets::default()
+    };
+
+    let region = EdgeSamplingRegion {
+        w: eff_w,
+        h: eff_h,
+        edge_depth,
+        bars,
     };
 
     for edge_name in cfg.effective_edge_order() {
@@ -759,12 +795,9 @@ pub fn process_monitor_frame_into(
         }
         sample_edge_area_averages(
             &scratch.thumb_rgb,
-            eff_w,
-            eff_h,
+            &region,
             edge_name,
             num_leds,
-            edge_depth,
-            bars,
             &mut scratch.edge_pixels,
         );
 
@@ -1016,7 +1049,11 @@ mod tests {
         );
         assert_eq!(out.len(), cfg.leds_top * 3);
         // Should sample the red inner content instead of the black letterbox bar
-        assert!(out.chunks_exact(3).all(|px| px[0] >= 230 && px[1] <= 25));
+        assert!(out
+            .as_chunks::<3>()
+            .0
+            .iter()
+            .all(|px| px[0] >= 230 && px[1] <= 25));
     }
 
     #[test]
@@ -1120,8 +1157,8 @@ mod tests {
             2.0,
         );
 
-        let norm_chunks: Vec<[u8; 3]> = out_norm.chunks_exact(3).map(|c| [c[0], c[1], c[2]]).collect();
-        let mut inv_chunks: Vec<[u8; 3]> = out_inv.chunks_exact(3).map(|c| [c[0], c[1], c[2]]).collect();
+        let norm_chunks: Vec<[u8; 3]> = out_norm.as_chunks::<3>().0.to_vec();
+        let mut inv_chunks: Vec<[u8; 3]> = out_inv.as_chunks::<3>().0.to_vec();
         inv_chunks.reverse();
         assert_eq!(norm_chunks, inv_chunks);
     }

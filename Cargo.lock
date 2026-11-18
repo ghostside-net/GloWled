@@ -1345,6 +1345,7 @@ dependencies = [
  "serde_json",
  "slint",
  "slint-build",
+ "thiserror 2.0.21",
  "tray-icon",
  "windows 0.58.0",
  "winreg",
