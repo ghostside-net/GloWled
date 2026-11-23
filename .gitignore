@@ -1,7 +1,9 @@
 # Rust / Cargo build artifacts (Cargo.lock is tracked for binary reproducibility)
 /target/
+/dist/
 **/*.rs.bk
 *.pdb
+*.old
 
 # IDE & Editors
 .idea/
@@ -14,4 +16,6 @@
 .DS_Store
 Thumbs.db
 *.log
+config.json
 .env
+.env.*

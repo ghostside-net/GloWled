@@ -331,6 +331,7 @@ pub struct AppConfig {
     pub resolution: String,
     pub start_minimized: bool,
     pub autostart: bool,
+    pub check_updates_on_startup: bool,
     pub last_known_exe_path: String,
     pub monitors: Vec<MonitorConfig>,
 }
@@ -356,6 +357,7 @@ impl Default for AppConfig {
             resolution: "Auto (Adaptiv)".to_string(),
             start_minimized: true,
             autostart: false,
+            check_updates_on_startup: true,
             last_known_exe_path: String::new(),
             monitors: vec![MonitorConfig::default()],
         }

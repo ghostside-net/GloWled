@@ -203,10 +203,15 @@ export component SettingsWindow inherits Window {
     in-out property <int> edge_right_offset_pct: 0;
 
     // 4. System & Live Status
+    in-out property <string> app_version: "2.0.0";
     in-out property <bool> ambilight_active: true;
     in-out property <bool> eco_mode: true;
     in-out property <bool> autostart: false;
     in-out property <bool> start_minimized: true;
+    in-out property <bool> check_updates_on_startup: true;
+    in-out property <bool> update_checking: false;
+    in-out property <string> update_status_text: "Noch nicht geprüft";
+    in-out property <bool> update_status_error: false;
     in-out property <string> live_status_text: "Bereit";
     in-out property <string> status_badge_text: "AKTIV";
     in-out property <[PreviewMonitorItem]> preview_monitors: [];
@@ -223,6 +228,7 @@ export component SettingsWindow inherits Window {
     callback update-monitor-corner(int, int);
     callback update-monitor-clockwise(int, bool);
     callback toggle-autostart(bool);
+    callback check-for-updates();
     callback hide-to-tray();
 
     VerticalBox {
@@ -948,12 +954,46 @@ export component SettingsWindow inherits Window {
                             text: "Immer direkt minimiert im System-Tray starten";
                             checked <=> root.start_minimized;
                         }
+
+                        CheckBox {
+                            text: "Beim Start automatisch nach Updates suchen";
+                            checked <=> root.check_updates_on_startup;
+                        }
+                    }
+
+                    SectionCard {
+                        title: "Updates (GitHub Releases)";
+
+                        HorizontalBox {
+                            padding: 0px;
+                            spacing: 10px;
+                            Text {
+                                text: "Installierte Version: v" + root.app_version;
+                                color: #f4f4f5;
+                                font-size: 12px;
+                                font-weight: 700;
+                                vertical-alignment: center;
+                                horizontal-stretch: 1;
+                            }
+                            Button {
+                                text: root.update_checking ? "Prüfe..." : "Nach Updates suchen";
+                                enabled: !root.update_checking;
+                                clicked => { root.check-for-updates(); }
+                            }
+                        }
+
+                        Text {
+                            text: root.update_status_text;
+                            color: root.update_status_error ? #f87171 : #a1a1aa;
+                            font-size: 12px;
+                            wrap: word-wrap;
+                        }
                     }
 
                     SectionCard {
                         title: "Info & Ressourcen";
                         Text {
-                            text: "GloWled v2.0.0 — Native Rust Single-Binary mit Slint UI.\nBeim Klick auf [X] wird nur das Fenster ausgeblendet (0% GPU/GUI-Overhead), während der Capture-Worker unauffällig im System-Tray weiterläuft.";
+                            text: "GloWled v" + root.app_version + " — Native Rust Single-Binary mit Slint UI.\nBeim Klick auf [X] wird nur das Fenster ausgeblendet (0% GPU/GUI-Overhead), während der Capture-Worker unauffällig im System-Tray weiterläuft.";
                             color: #a1a1aa;
                             font-size: 12px;
                             wrap: word-wrap;
@@ -990,6 +1030,127 @@ export component SettingsWindow inherits Window {
                 text: "Übernehmen & Speichern";
                 primary: true;
                 clicked => { root.apply-settings(); }
+            }
+        }
+    }
+}
+
+export component UpdateDialog inherits Window {
+    title: "GloWled — Software-Update verfügbar";
+    preferred-width: 540px;
+    preferred-height: 440px;
+    min-width: 460px;
+    min-height: 360px;
+    background: #0f0f11;
+
+    init => {
+        Palette.color-scheme = ColorScheme.dark;
+    }
+
+    in-out property <string> current_version: "2.0.0";
+    in-out property <string> new_version: "";
+    in-out property <string> asset_name: "";
+    in-out property <string> release_notes: "";
+    in-out property <string> status_message: "";
+    in-out property <bool> is_error: false;
+    in-out property <bool> is_busy: false;
+
+    callback install-update();
+    callback dismiss-update();
+
+    VerticalBox {
+        padding: 16px;
+        spacing: 12px;
+
+        HorizontalBox {
+            padding: 0px;
+            spacing: 10px;
+            Text {
+                text: "Neue GloWled-Version verfügbar";
+                color: #38bdf8;
+                font-size: 18px;
+                font-weight: 800;
+                horizontal-stretch: 1;
+                vertical-alignment: center;
+            }
+            Rectangle {
+                height: 26px;
+                min-width: 84px;
+                border-radius: 6px;
+                background: #064e3b;
+                border-width: 1px;
+                border-color: #10b981;
+                Text {
+                    text: "v" + root.new_version;
+                    color: #34d399;
+                    font-size: 12px;
+                    font-weight: 700;
+                    horizontal-alignment: center;
+                    vertical-alignment: center;
+                }
+            }
+        }
+
+        SectionCard {
+            title: "Versionsübersicht";
+            Text {
+                text: "Aktuelle Version: v" + root.current_version + "   →   Neue Version: v" + root.new_version;
+                color: #f4f4f5;
+                font-size: 13px;
+                font-weight: 700;
+            }
+            if root.asset_name != "" : Text {
+                text: "Download-Paket: " + root.asset_name;
+                color: #a1a1aa;
+                font-size: 11px;
+            }
+        }
+
+        SectionCard {
+            title: "Release-Notes / Changelog";
+            vertical-stretch: 1;
+
+            ScrollView {
+                vertical-stretch: 1;
+                Text {
+                    text: root.release_notes;
+                    color: #d4d4d8;
+                    font-size: 12px;
+                    wrap: word-wrap;
+                }
+            }
+        }
+
+        if root.status_message != "" : Text {
+            text: root.status_message;
+            color: root.is_error ? #f87171 : #38bdf8;
+            font-size: 12px;
+            wrap: word-wrap;
+        }
+
+        Text {
+            text: "Möchten Sie das Update jetzt herunterladen und installieren?";
+            color: #e4e4e7;
+            font-size: 12px;
+            font-weight: 600;
+        }
+
+        HorizontalBox {
+            padding: 0px;
+            spacing: 10px;
+            alignment: end;
+
+            Button {
+                text: "Später";
+                enabled: !root.is_busy;
+                clicked => { root.dismiss-update(); }
+            }
+
+            Button {
+                text: root.is_busy ? "Installiere..." : "Jetzt aktualisieren";
+                primary: true;
+                enabled: !root.is_busy;
+                clicked => { root.install-update(); }
             }
         }
     }

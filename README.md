@@ -29,10 +29,16 @@
 - **WLED Realtime Protocols (`src/wled.rs`):**
   - Supports **DRGB** (`[2, timeout, R, G, B, ...]`, default), **DDP** (10-byte Distributed Display Protocol header + RGB), and **WARLS** (`[1, timeout, idx, R, G, B, ...]`).
   - Eco Mode skips processing on static frames and sends 1 Hz UDP keep-alive packets.
-- **System Tray & Windows Integration (`src/tray.rs`, `src/config.rs`):**
-  - Native tray menu (`tray-icon` + `muda`): *Status (Aktiv/Pausiert)*, *Einstellungen öffnen*, *Beenden*.
+- **System Tray & Windows Integration (`src/tray.rs`, `src/config.rs`, `build.rs`):**
+  - Native tray menu (`tray-icon` + `muda`): *Status (Aktiv/Pausiert)*, *Einstellungen öffnen*, *Nach Updates suchen*, *Beenden*.
   - Configuration persisted at `%APPDATA%\GloWled\config.json` (backward-compatible with Python v1.x configs; `~/.glowled/config.json` on Unix).
   - Windows Autostart via Registry `HKCU\Software\Microsoft\Windows\CurrentVersion\Run`.
+  - Embedded Windows application icon (`icon.ico`), Per-Monitor V2 DPI-awareness manifest (`assets/glowled.manifest`), and `VERSIONINFO` metadata.
+- **GitHub Releases Auto-Updater (`src/updater.rs`):**
+  - Non-blocking background check on startup (configurable) or manual check via System Tray / Settings UI against `api.github.com/repos/ghostside-net/GloWled/releases/latest`.
+  - Strict SemVer comparison (`semver`), ignoring drafts and prereleases.
+  - Confirmation dialog (`UpdateDialog` in Slint) showing current/new version and release notes before downloading.
+  - Optional SHA-256 checksum verification (`.sha256` / `SHA256SUMS`), `.zip` extraction support, Windows `.exe` → `.exe.old` in-place replacement with automatic rollback on failure, and clean restart.
 - **Slint Dark-Mode Settings UI (`ui/settings.slint`):**
   - Four structured tabs: **1. Verbindung**, **2. Monitore & LEDs**, **3. Bild & Farbe**, **4. System**, plus per-monitor separated live edge preview bars while visible.
 
@@ -49,10 +55,10 @@
 
 ```bash
 # Run all Rust unit and integration tests
-cargo test
+cargo test --all
 
 # Run linter and formatting checks
-cargo clippy --all-targets -- -D warnings
+cargo clippy --all-targets --all-features -- -D warnings
 cargo fmt --check
 
 # Build size- & speed-optimized release binary (LTO, opt-level=3, strip=true)
@@ -63,6 +69,14 @@ cargo build --release --target x86_64-pc-windows-msvc
 
 # Windows target cross-build from Linux (GNU + zigbuild)
 cargo zigbuild --release --target x86_64-pc-windows-gnu
+```
+
+### Release Artifact (`./dist/`)
+
+Pre-built Windows binaries are placed in `./dist/glowled.exe` together with `./dist/glowled.exe.sha256`:
+
+```bash
+sha256sum -c dist/glowled.exe.sha256
 ```
 
 ### CLI Options
@@ -101,6 +115,7 @@ glowled --version       # Print version and exit
 | `resolution` | `string` | `"Auto (Adaptiv)"` | Adaptive or fixed capture downscale preset |
 | `start_minimized` | `bool` | `true` | Start hidden in System Tray |
 | `autostart` | `bool` | `false` | Register `HKCU\...\Run\GloWled` entry |
+| `check_updates_on_startup` | `bool` | `true` | Check GitHub Releases automatically on launch |
 | `monitors` | `array` | `[...]` | Per-monitor index, per-edge LEDs, corner, direction, order |
 
 ---

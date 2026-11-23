@@ -48,4 +48,7 @@ pub enum GlowledError {
 
     #[error("UI-Fehler: {0}")]
     Ui(String),
+
+    #[error("Update-Fehler: {0}")]
+    Update(String),
 }

@@ -15,6 +15,10 @@ use glowled::processing::{
     process_monitor_frame_with_sampling_into, ProcessingScratch, TemporalSmoother,
 };
 use glowled::tray::{TrayAction, TrayManager};
+use glowled::updater::{
+    cleanup_old_binary, spawn_restarted_executable, UpdateController, UpdateEvent, UpdateInfo,
+    CURRENT_VERSION,
+};
 use glowled::wled::{build_wled_packet_into, test_wled_connection, WorkerEvent, WorkerHandle};
 use slint::{Color, Model, ModelRc, SharedString, Timer, TimerMode, VecModel};
 
@@ -79,6 +83,19 @@ mod single_instance {
         }
     }
 
+    pub fn acquire_with_retry(wait_for_previous: bool) -> Option<InstanceGuard> {
+        let attempts = if wait_for_previous { 20 } else { 1 };
+        for i in 0..attempts {
+            if let Some(guard) = acquire() {
+                return Some(guard);
+            }
+            if i + 1 < attempts {
+                std::thread::sleep(std::time::Duration::from_millis(150));
+            }
+        }
+        None
+    }
+
     unsafe extern "system" fn enum_window_cb(hwnd: HWND, lparam: LPARAM) -> BOOL {
         let len = GetWindowTextLengthW(hwnd);
         if len > 0 {
@@ -114,7 +131,7 @@ mod single_instance {
 #[cfg(not(windows))]
 mod single_instance {
     pub struct InstanceGuard;
-    pub fn acquire() -> Option<InstanceGuard> {
+    pub fn acquire_with_retry(_wait_for_previous: bool) -> Option<InstanceGuard> {
         Some(InstanceGuard)
     }
     pub fn bring_existing_to_front() {}
@@ -127,6 +144,7 @@ struct CliFlags {
     autostart: bool,
     minimized: bool,
     force_show: bool,
+    post_update: bool,
 }
 
 impl CliFlags {
@@ -138,6 +156,7 @@ impl CliFlags {
             autostart: false,
             minimized: false,
             force_show: false,
+            post_update: false,
         };
         for arg in std::env::args().skip(1) {
             match arg.as_str() {
@@ -147,6 +166,7 @@ impl CliFlags {
                 "--autostart" => flags.autostart = true,
                 "--minimized" => flags.minimized = true,
                 "--show" => flags.force_show = true,
+                "--post-update" => flags.post_update = true,
                 _ => {}
             }
         }
@@ -378,10 +398,12 @@ fn populate_ui_from_config(
     ui.set_edge_right_depth_pct(ratio_to_pct(cfg.edge_sampling.right.depth, 1.0, 50.0));
     ui.set_edge_right_offset_pct(ratio_to_pct(cfg.edge_sampling.right.offset, 0.0, 50.0));
 
+    ui.set_app_version(SharedString::from(CURRENT_VERSION));
     ui.set_ambilight_active(active);
     ui.set_eco_mode(cfg.eco_mode);
     ui.set_autostart(cfg.autostart || is_autostart_enabled());
     ui.set_start_minimized(cfg.start_minimized);
+    ui.set_check_updates_on_startup(cfg.check_updates_on_startup);
     ui.set_status_badge_text(SharedString::from(if active {
         "AKTIV"
     } else {
@@ -433,6 +455,7 @@ fn read_config_from_ui(
     cfg.eco_mode = ui.get_eco_mode();
     cfg.autostart = ui.get_autostart();
     cfg.start_minimized = ui.get_start_minimized();
+    cfg.check_updates_on_startup = ui.get_check_updates_on_startup();
     cfg.last_known_exe_path = get_current_executable_path();
 
     cfg.monitors = if working_monitors.is_empty() {
@@ -466,15 +489,19 @@ fn run() -> Result<()> {
         return Ok(());
     }
 
-    let _instance_guard = match single_instance::acquire() {
-        Some(guard) => guard,
-        None => {
-            if !flags.autostart && !flags.minimized && !flags.headless {
-                single_instance::bring_existing_to_front();
+    cleanup_old_binary();
+
+    let instance_guard = Rc::new(RefCell::new(Some(
+        match single_instance::acquire_with_retry(flags.post_update) {
+            Some(guard) => guard,
+            None => {
+                if !flags.autostart && !flags.minimized && !flags.headless {
+                    single_instance::bring_existing_to_front();
+                }
+                return Ok(());
             }
-            return Ok(());
-        }
-    };
+        },
+    )));
 
     let mut cfg = load_config();
     cfg.sanitize();
@@ -799,12 +826,98 @@ fn run() -> Result<()> {
         });
     }
 
-    // 50 ms Slint Timer for Tray events & live UI preview (no-op on UI when hidden!)
+    let update_dialog = UpdateDialog::new()
+        .map_err(|e| GlowledError::Ui(format!("UpdateDialog Initialisierung: {e}")))?;
+    let updater = Rc::new(UpdateController::new());
+    let pending_update: Rc<RefCell<Option<UpdateInfo>>> = Rc::new(RefCell::new(None));
+
+    // Prevent closing the update dialog mid-installation
+    {
+        let dlg_weak = update_dialog.as_weak();
+        update_dialog.window().on_close_requested(move || {
+            if let Some(dlg) = dlg_weak.upgrade() {
+                if dlg.get_is_busy() {
+                    return slint::CloseRequestResponse::KeepWindowShown;
+                }
+            }
+            slint::CloseRequestResponse::HideWindow
+        });
+    }
+
+    // Dismiss update dialog callback
+    {
+        let dlg_weak = update_dialog.as_weak();
+        update_dialog.on_dismiss_update(move || {
+            if let Some(dlg) = dlg_weak.upgrade() {
+                if !dlg.get_is_busy() {
+                    let _ = dlg.hide();
+                }
+            }
+        });
+    }
+
+    // Install confirmed update callback
+    {
+        let dlg_weak = update_dialog.as_weak();
+        let updater_ref = updater.clone();
+        let pending_ref = pending_update.clone();
+        update_dialog.on_install_update(move || {
+            let Some(info) = pending_ref.borrow().clone() else {
+                return;
+            };
+            if let Some(dlg) = dlg_weak.upgrade() {
+                dlg.set_is_busy(true);
+                dlg.set_is_error(false);
+                dlg.set_status_message(SharedString::from("Update wird vorbereitet..."));
+            }
+            if !updater_ref.spawn_install(info) {
+                if let Some(dlg) = dlg_weak.upgrade() {
+                    dlg.set_is_busy(false);
+                    dlg.set_is_error(true);
+                    dlg.set_status_message(SharedString::from("Ein Update-Vorgang läuft bereits."));
+                }
+            }
+        });
+    }
+
+    // Manual update check callback from SettingsWindow
+    {
+        let ui_weak = ui.as_weak();
+        let updater_ref = updater.clone();
+        ui.on_check_for_updates(move || {
+            if let Some(win) = ui_weak.upgrade() {
+                win.set_update_checking(true);
+                win.set_update_status_error(false);
+                win.set_update_status_text(SharedString::from("Suche nach Updates auf GitHub..."));
+            }
+            if !updater_ref.spawn_check(true) {
+                if let Some(win) = ui_weak.upgrade() {
+                    win.set_update_checking(false);
+                    win.set_update_status_text(SharedString::from("Update-Prüfung läuft bereits."));
+                }
+            }
+        });
+    }
+
+    // Non-blocking startup update check (2s after launch)
+    let startup_update_timer = Timer::default();
+    if cfg.check_updates_on_startup {
+        let updater_ref = updater.clone();
+        startup_update_timer.start(TimerMode::SingleShot, Duration::from_secs(2), move || {
+            let _ = updater_ref.spawn_check(false);
+        });
+    }
+
+    // 50 ms Slint Timer for Tray events, updater events & live UI preview (no-op on UI when hidden!)
     let poll_timer = Timer::default();
     {
         let ui_weak = ui.as_weak();
+        let dlg_weak = update_dialog.as_weak();
         let tray_ref = tray.clone();
         let worker_ref = worker.clone();
+        let updater_ref = updater.clone();
+        let pending_ref = pending_update.clone();
+        let guard_ref = instance_guard.clone();
         let active_ref = active_state.clone();
         let vis_ref = ui_visible.clone();
 
@@ -833,10 +946,134 @@ fn run() -> Result<()> {
                                 let _ = win.show();
                             }
                         }
+                        TrayAction::CheckUpdates => {
+                            if let Some(win) = ui_weak.upgrade() {
+                                win.set_update_checking(true);
+                                win.set_update_status_error(false);
+                                win.set_update_status_text(SharedString::from(
+                                    "Suche nach Updates auf GitHub...",
+                                ));
+                            }
+                            let _ = updater_ref.spawn_check(true);
+                        }
                         TrayAction::Quit => {
                             worker_ref.borrow_mut().stop();
                             let _ = slint::quit_event_loop();
                             return;
+                        }
+                    }
+                }
+            }
+
+            // Handle asynchronous GitHub update events without blocking the UI thread
+            while let Some(ev) = updater_ref.try_recv_event() {
+                match ev {
+                    UpdateEvent::UpToDate {
+                        current_version,
+                        latest_version,
+                        manual,
+                    } => {
+                        if let Some(win) = ui_weak.upgrade() {
+                            win.set_update_checking(false);
+                            win.set_update_status_error(false);
+                            let msg = format!(
+                                "Aktuell: v{current_version} (neuestes Release: v{latest_version})"
+                            );
+                            win.set_update_status_text(SharedString::from(msg.as_str()));
+                            if manual {
+                                win.set_active_tab(3);
+                                vis_ref.set(true);
+                                worker_ref.borrow().set_ui_open(true);
+                                let _ = win.show();
+                                win.set_live_status_text(SharedString::from(
+                                    "GloWled ist bereits auf dem neuesten Stand.",
+                                ));
+                            }
+                        }
+                    }
+                    UpdateEvent::UpdateAvailable(info) => {
+                        let info = *info;
+                        let new_ver = info.new_version.to_string();
+                        if let Some(win) = ui_weak.upgrade() {
+                            win.set_update_checking(false);
+                            win.set_update_status_error(false);
+                            win.set_update_status_text(SharedString::from(format!(
+                                "Update verfügbar: v{new_ver}"
+                            )));
+                        }
+                        *pending_ref.borrow_mut() = Some(info.clone());
+                        if let Some(dlg) = dlg_weak.upgrade() {
+                            dlg.set_current_version(SharedString::from(
+                                info.current_version.to_string(),
+                            ));
+                            dlg.set_new_version(SharedString::from(new_ver));
+                            dlg.set_asset_name(SharedString::from(info.asset.name));
+                            dlg.set_release_notes(SharedString::from(info.release_notes));
+                            dlg.set_status_message(SharedString::from(""));
+                            dlg.set_is_error(false);
+                            dlg.set_is_busy(false);
+                            let _ = dlg.show();
+                        }
+                    }
+                    UpdateEvent::CheckFailed { error, manual } => {
+                        if let Some(win) = ui_weak.upgrade() {
+                            win.set_update_checking(false);
+                            if manual {
+                                win.set_update_status_error(true);
+                                win.set_update_status_text(SharedString::from(format!(
+                                    "Update-Prüfung fehlgeschlagen: {error}"
+                                )));
+                                win.set_active_tab(3);
+                                vis_ref.set(true);
+                                worker_ref.borrow().set_ui_open(true);
+                                let _ = win.show();
+                            }
+                        }
+                    }
+                    UpdateEvent::InstallProgress(stage) => {
+                        if let Some(dlg) = dlg_weak.upgrade() {
+                            dlg.set_is_error(false);
+                            dlg.set_status_message(SharedString::from(stage));
+                        }
+                    }
+                    UpdateEvent::InstallFailed(error) => {
+                        if let Some(dlg) = dlg_weak.upgrade() {
+                            dlg.set_is_busy(false);
+                            dlg.set_is_error(true);
+                            dlg.set_status_message(SharedString::from(format!(
+                                "Update fehlgeschlagen (vorherige Version bleibt aktiv): {error}"
+                            )));
+                        }
+                        if let Some(win) = ui_weak.upgrade() {
+                            win.set_update_status_error(true);
+                            win.set_update_status_text(SharedString::from(format!(
+                                "Update-Fehler: {error}"
+                            )));
+                        }
+                    }
+                    UpdateEvent::InstallCompleted {
+                        new_version,
+                        exe_path,
+                    } => {
+                        worker_ref.borrow_mut().stop();
+                        *guard_ref.borrow_mut() = None;
+                        match spawn_restarted_executable(&exe_path) {
+                            Ok(()) => {
+                                if let Some(dlg) = dlg_weak.upgrade() {
+                                    let _ = dlg.hide();
+                                }
+                                let _ = slint::quit_event_loop();
+                                return;
+                            }
+                            Err(err) => {
+                                if let Some(dlg) = dlg_weak.upgrade() {
+                                    dlg.set_is_busy(false);
+                                    dlg.set_is_error(true);
+                                    dlg.set_status_message(SharedString::from(format!(
+                                        "Update auf v{new_version} installiert, Neustart fehlgeschlagen: {err}"
+                                    )));
+                                }
+                            }
                         }
                     }
                 }
@@ -894,6 +1131,7 @@ fn run() -> Result<()> {
 
     slint::run_event_loop_until_quit()
         .map_err(|e| GlowledError::Ui(format!("Slint Event-Loop fehlgeschlagen: {e}")))?;
+    drop(startup_update_timer);
     worker.borrow_mut().stop();
     Ok(())
 }

@@ -12,6 +12,7 @@ const EMBEDDED_ICO: &[u8] = include_bytes!("../icon.ico");
 pub enum TrayAction {
     ToggleActive,
     OpenSettings,
+    CheckUpdates,
     Quit,
 }
 
@@ -20,16 +21,18 @@ pub struct TrayManager {
     _tray_icon: TrayIcon,
     status_item: MenuItem,
     open_item: MenuItem,
+    update_item: MenuItem,
     quit_item: MenuItem,
 }
 
 impl TrayManager {
-    /// Creates the system tray icon and context menu (`Status`, `Einstellungen öffnen`, `Beenden`).
+    /// Creates the system tray icon and context menu (`Status`, `Einstellungen öffnen`, `Nach Updates suchen`, `Beenden`).
     pub fn new(initial_active: bool) -> Result<Self> {
         let icon = load_tray_icon()?;
 
         let status_item = MenuItem::new(status_label(initial_active), true, None);
         let open_item = MenuItem::new("Einstellungen öffnen", true, None);
+        let update_item = MenuItem::new("Nach Updates suchen", true, None);
         let quit_item = MenuItem::new("Beenden", true, None);
 
         let menu = Menu::new();
@@ -38,6 +41,8 @@ impl TrayManager {
         menu.append(&PredefinedMenuItem::separator())
             .map_err(|e| GlowledError::Tray(format!("Menu separator failed: {e}")))?;
         menu.append(&open_item)
+            .map_err(|e| GlowledError::Tray(format!("Menu append failed: {e}")))?;
+        menu.append(&update_item)
             .map_err(|e| GlowledError::Tray(format!("Menu append failed: {e}")))?;
         menu.append(&PredefinedMenuItem::separator())
             .map_err(|e| GlowledError::Tray(format!("Menu separator failed: {e}")))?;
@@ -55,6 +60,7 @@ impl TrayManager {
             _tray_icon: tray_icon,
             status_item,
             open_item,
+            update_item,
             quit_item,
         })
     }
@@ -91,6 +97,8 @@ impl TrayManager {
                 actions.push(TrayAction::ToggleActive);
             } else if event.id == *self.open_item.id() {
                 actions.push(TrayAction::OpenSettings);
+            } else if event.id == *self.update_item.id() {
+                actions.push(TrayAction::CheckUpdates);
             } else if event.id == *self.quit_item.id() {
                 actions.push(TrayAction::Quit);
             }
