@@ -71,14 +71,6 @@ cargo build --release --target x86_64-pc-windows-msvc
 cargo zigbuild --release --target x86_64-pc-windows-gnu
 ```
 
-### Release Artifact (`./dist/`)
-
-Pre-built Windows binaries are placed in `./dist/glowled.exe` together with `./dist/glowled.exe.sha256`:
-
-```bash
-sha256sum -c dist/glowled.exe.sha256
-```
-
 ### CLI Options
 
 ```bash
