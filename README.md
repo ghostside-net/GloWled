@@ -29,8 +29,9 @@
 - **WLED Realtime Protocols (`src/wled.rs`):**
   - Supports **DRGB** (`[2, timeout, R, G, B, ...]`, default), **DDP** (10-byte Distributed Display Protocol header + RGB), and **WARLS** (`[1, timeout, idx, R, G, B, ...]`).
   - Eco Mode skips processing on static frames and sends 1 Hz UDP keep-alive packets.
-- **System Tray & Windows Integration (`src/tray.rs`, `src/config.rs`, `build.rs`):**
-  - Native tray menu (`tray-icon` + `muda`): *Status (Aktiv/Pausiert)*, *Einstellungen öffnen*, *Nach Updates suchen*, *Beenden*.
+- **System Tray & Windows Integration (`src/tray.rs`, `src/config.rs`, `src/i18n.rs`, `build.rs`):**
+  - Multi-language UI and tray support (**German** and **English**, live-switchable without restart, persisted in `config.json`).
+  - Native tray menu (`tray-icon` + `muda`): localized *Status (Active/Paused)*, *Open Settings*, *Check for Updates*, *Quit*.
   - Configuration persisted at `%APPDATA%\GloWled\config.json` (backward-compatible with Python v1.x configs; `~/.glowled/config.json` on Unix).
   - Windows Autostart via Registry `HKCU\Software\Microsoft\Windows\CurrentVersion\Run`.
   - Embedded Windows application icon (`icon.ico`), Per-Monitor V2 DPI-awareness manifest (`assets/glowled.manifest`), and `VERSIONINFO` metadata.
@@ -108,6 +109,7 @@ glowled --version       # Print version and exit
 | `start_minimized` | `bool` | `true` | Start hidden in System Tray |
 | `autostart` | `bool` | `false` | Register `HKCU\...\Run\GloWled` entry |
 | `check_updates_on_startup` | `bool` | `true` | Check GitHub Releases automatically on launch |
+| `language` | `string` | `"de"` | UI & tray language (`"de"` or `"en"`, defaults to `"de"`) |
 | `monitors` | `array` | `[...]` | Per-monitor index, per-edge LEDs, corner, direction, order |
 
 ---

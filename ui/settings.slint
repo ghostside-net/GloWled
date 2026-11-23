@@ -11,6 +11,99 @@ import {
     VerticalBox,
 } from "std-widgets.slint";
 
+export global I18n {
+    in-out property <string> window_title: "GloWled — Ambilight Controller";
+    in-out property <string> tab_connection: "1. Verbindung";
+    in-out property <string> tab_monitors: "2. Monitore & LEDs";
+    in-out property <string> tab_image: "3. Bild & Farbe";
+    in-out property <string> tab_system: "4. System";
+
+    // Tab 0: Connection
+    in-out property <string> section_wled: "WLED-Controller";
+    in-out property <string> label_wled_ip: "WLED IP-Adresse:";
+    in-out property <string> placeholder_wled_ip: "z. B. 192.168.1.50";
+    in-out property <string> label_udp_port: "UDP Port:";
+    in-out property <string> label_protocol: "UDP-Protokoll:";
+    in-out property <[string]> protocol_options: ["DRGB (Standard)", "DDP", "WARLS"];
+    in-out property <string> btn_test_connection: "Verbindung testen";
+
+    // Tab 1: Monitors & LEDs
+    in-out property <string> section_detected_monitors: "Erkannte Monitore";
+    in-out property <string> btn_detect: "Erkennen";
+    in-out property <string> badge_added: "✓ Eingebunden";
+    in-out property <string> btn_add: "+ Einbinden";
+    in-out property <string> btn_remove: "Entfernen";
+    in-out property <string> label_top: "Oben:";
+    in-out property <string> label_bottom: "Unten:";
+    in-out property <string> label_left: "Links:";
+    in-out property <string> label_right: "Rechts:";
+    in-out property <string> label_start_corner: "Start-Ecke:";
+    in-out property <[string]> corner_options: ["Unten Links", "Oben Links", "Oben Rechts", "Unten Rechts"];
+    in-out property <string> label_direction: "Ausrichtung:";
+    in-out property <string> dir_cw: "Uhrzeigersinn (CW)";
+    in-out property <string> dir_ccw: "Gegenuhrzeigersinn (CCW)";
+    in-out property <string> summary_monitors_prefix: "Monitore: ";
+    in-out property <string> summary_total_leds_mid: " • Gesamt: ";
+    in-out property <string> leds_unit: "LEDs";
+
+    // Tab 2: Image & Color
+    in-out property <string> section_sampling_fps: "Abtastung & Bildrate";
+    in-out property <string> label_resolution: "Auflösung:";
+    in-out property <[string]> resolution_options: [
+        "Auto (Adaptiv)",
+        "Performance (64x36)",
+        "Balance (128x72)",
+        "Quality (256x144)",
+        "Ultra (512x288)"
+    ];
+    in-out property <string> label_fps_limit: "FPS-Limit: ";
+    in-out property <string> section_color_gamma: "Farbe, Gamma & Kinobalken";
+    in-out property <string> label_brightness: "Helligkeit: ";
+    in-out property <string> label_saturation: "Sättigung: ";
+    in-out property <string> label_gamma: "Gamma: ";
+    in-out property <string> label_smoothing: "Glättung: ";
+    in-out property <string> label_black_threshold: "Schwarz-Schwelle: ";
+    in-out property <string> check_black_bar: "Kinobalken automatisch erkennen";
+    in-out property <string> section_edge_strips: "Abtast-Streifen";
+    in-out property <string> edge_strips_hint: "Breite & Randabstand pro Seite";
+    in-out property <string> edge_depth_label: "Breite: ";
+    in-out property <string> edge_offset_label: "Abstand: ";
+    in-out property <string> side_top: "Oben";
+    in-out property <string> side_bottom: "Unten";
+    in-out property <string> side_left: "Links";
+    in-out property <string> side_right: "Rechts";
+
+    // Tab 3: System
+    in-out property <string> section_operation: "Betrieb & System-Tray";
+    in-out property <string> label_language: "Sprache:";
+    in-out property <string> check_ambilight_active: "Ambilight aktiv";
+    in-out property <string> check_eco_mode: "Eco-Modus (Standbild-Pause)";
+    in-out property <string> check_autostart: "Mit Windows starten";
+    in-out property <string> check_start_minimized: "Minimiert im Tray starten";
+    in-out property <string> check_updates_startup: "Beim Start nach Updates suchen";
+    in-out property <string> section_updates: "Updates";
+    in-out property <string> label_installed_version: "Installierte Version: v";
+    in-out property <string> btn_check_updates: "Nach Updates suchen";
+    in-out property <string> btn_checking: "Prüfe...";
+
+    // Bottom Bar
+    in-out property <string> btn_hide_to_tray: "In Tray ausblenden";
+    in-out property <string> btn_apply_save: "Übernehmen & Speichern";
+
+    // Update Dialog
+    in-out property <string> update_dialog_title: "GloWled — Update verfügbar";
+    in-out property <string> update_heading: "Neue Version verfügbar";
+    in-out property <string> update_section_version: "Version";
+    in-out property <string> update_current_prefix: "Aktuell: v";
+    in-out property <string> update_new_prefix: "   →   Neu: v";
+    in-out property <string> update_package_prefix: "Paket: ";
+    in-out property <string> update_section_notes: "Release-Notes";
+    in-out property <string> update_confirm_prompt: "Update jetzt herunterladen und installieren?";
+    in-out property <string> btn_later: "Später";
+    in-out property <string> btn_update_now: "Jetzt aktualisieren";
+    in-out property <string> btn_installing: "Installiere...";
+}
+
 export struct PreviewMonitorItem {
     label: string,
     colors: [color],
@@ -119,10 +212,10 @@ component EdgeStripControl inherits Rectangle {
             padding: 0px;
             spacing: 8px;
             Text {
-                text: "Streifenbreite: " + root.depth_pct + "%";
+                text: I18n.edge_depth_label + root.depth_pct + "%";
                 color: #d4d4d8;
                 font-size: 11px;
-                width: 128px;
+                width: 96px;
                 vertical-alignment: center;
             }
             Slider {
@@ -138,10 +231,10 @@ component EdgeStripControl inherits Rectangle {
             padding: 0px;
             spacing: 8px;
             Text {
-                text: "Randabstand: " + root.offset_pct + "%";
+                text: I18n.edge_offset_label + root.offset_pct + "%";
                 color: #d4d4d8;
                 font-size: 11px;
-                width: 128px;
+                width: 96px;
                 vertical-alignment: center;
             }
             Slider {
@@ -156,33 +249,34 @@ component EdgeStripControl inherits Rectangle {
 }
 
 export component SettingsWindow inherits Window {
-    title: "GloWled — Ambilight Controller";
+    title: I18n.window_title;
     preferred-width: 700px;
-    preferred-height: 780px;
+    preferred-height: 700px;
     min-width: 600px;
-    min-height: 640px;
+    min-height: 560px;
     background: #0f0f11;
 
     init => {
         Palette.color-scheme = ColorScheme.dark;
     }
 
-    // Active tab index (0: Verbindung, 1: Monitore & LEDs, 2: Bild & Farbe, 3: System)
+    // Active tab index (0: Connection, 1: Monitors & LEDs, 2: Image & Color, 3: System)
     in-out property <int> active_tab: 0;
+    in-out property <int> language_index: 0;
 
-    // 1. Verbindung
+    // 1. Connection
     in-out property <string> wled_ip: "127.0.0.1";
     in-out property <string> wled_port: "21324";
     in-out property <int> protocol_index: 0;
     in-out property <string> connection_status: "";
     in-out property <bool> connection_ok: true;
 
-    // 2. Monitore & LED-Geometrie (multi-monitor)
+    // 2. Monitors & LED geometry (multi-monitor)
     in-out property <[DetectedMonitorItem]> detected_monitors: [];
     in-out property <[ConfiguredMonitorItem]> configured_monitors: [];
     in-out property <int> total_leds_all_monitors: 48;
 
-    // 3. Bild & Farbe (global across all monitors)
+    // 3. Image & Color (global across all monitors)
     in-out property <int> fps_limit: 60;
     in-out property <float> gamma: 1.0;
     in-out property <float> brightness: 1.0;
@@ -210,9 +304,9 @@ export component SettingsWindow inherits Window {
     in-out property <bool> start_minimized: true;
     in-out property <bool> check_updates_on_startup: true;
     in-out property <bool> update_checking: false;
-    in-out property <string> update_status_text: "Noch nicht geprüft";
+    in-out property <string> update_status_text: "";
     in-out property <bool> update_status_error: false;
-    in-out property <string> live_status_text: "Bereit";
+    in-out property <string> live_status_text: "";
     in-out property <string> status_badge_text: "AKTIV";
     in-out property <[PreviewMonitorItem]> preview_monitors: [];
 
@@ -220,6 +314,7 @@ export component SettingsWindow inherits Window {
     callback test-connection();
     callback apply-settings();
     callback toggle-active(bool);
+    callback change-language(int);
     callback detect-monitors();
     callback add-monitor(int);
     callback remove-monitor(int);
@@ -243,7 +338,7 @@ export component SettingsWindow inherits Window {
 
             HorizontalBox {
                 padding: 0px;
-                spacing: 6px;
+                spacing: 8px;
                 Text {
                     text: "GloWled";
                     color: #38bdf8;
@@ -252,28 +347,83 @@ export component SettingsWindow inherits Window {
                     vertical-alignment: center;
                 }
                 Text {
-                    text: "• Rust + Slint Edition";
+                    text: "v" + root.app_version;
                     color: #71717a;
-                    font-size: 13px;
+                    font-size: 12px;
                     vertical-alignment: center;
                 }
             }
 
-            Rectangle {
-                height: 28px;
-                min-width: 110px;
-                border-radius: 6px;
-                background: root.ambilight_active ? #064e3b : #450a0a;
-                border-width: 1px;
-                border-color: root.ambilight_active ? #10b981 : #dc2626;
+            HorizontalBox {
+                padding: 0px;
+                spacing: 8px;
 
-                Text {
-                    text: "● " + root.status_badge_text;
-                    color: root.ambilight_active ? #34d399 : #f87171;
-                    font-size: 12px;
-                    font-weight: 700;
-                    horizontal-alignment: center;
-                    vertical-alignment: center;
+                // Compact DE | EN Language Toggle Pill
+                Rectangle {
+                    height: 28px;
+                    width: 72px;
+                    border-radius: 6px;
+                    background: #18181b;
+                    border-width: 1px;
+                    border-color: #27272a;
+                    clip: true;
+
+                    HorizontalLayout {
+                        Rectangle {
+                            horizontal-stretch: 1;
+                            background: root.language_index == 0 ? #2563eb : (de_touch.has-hover ? #27272a : transparent);
+                            de_touch := TouchArea {
+                                clicked => { root.change-language(0); }
+                            }
+                            Text {
+                                text: "DE";
+                                color: root.language_index == 0 ? #ffffff : #a1a1aa;
+                                font-size: 11px;
+                                font-weight: 700;
+                                horizontal-alignment: center;
+                                vertical-alignment: center;
+                            }
+                        }
+
+                        Rectangle {
+                            width: 1px;
+                            background: #27272a;
+                        }
+
+                        Rectangle {
+                            horizontal-stretch: 1;
+                            background: root.language_index == 1 ? #2563eb : (en_touch.has-hover ? #27272a : transparent);
+                            en_touch := TouchArea {
+                                clicked => { root.change-language(1); }
+                            }
+                            Text {
+                                text: "EN";
+                                color: root.language_index == 1 ? #ffffff : #a1a1aa;
+                                font-size: 11px;
+                                font-weight: 700;
+                                horizontal-alignment: center;
+                                vertical-alignment: center;
+                            }
+                        }
+                    }
+                }
+
+                Rectangle {
+                    height: 28px;
+                    min-width: 100px;
+                    border-radius: 6px;
+                    background: root.ambilight_active ? #064e3b : #450a0a;
+                    border-width: 1px;
+                    border-color: root.ambilight_active ? #10b981 : #dc2626;
+
+                    Text {
+                        text: "● " + root.status_badge_text;
+                        color: root.ambilight_active ? #34d399 : #f87171;
+                        font-size: 12px;
+                        font-weight: 700;
+                        horizontal-alignment: center;
+                        vertical-alignment: center;
+                    }
                 }
             }
         }
@@ -326,25 +476,25 @@ export component SettingsWindow inherits Window {
             spacing: 8px;
 
             TabChip {
-                label: "1. Verbindung";
+                label: I18n.tab_connection;
                 active: root.active_tab == 0;
                 horizontal-stretch: 1;
                 clicked => { root.active_tab = 0; }
             }
             TabChip {
-                label: "2. Monitore & LEDs";
+                label: I18n.tab_monitors;
                 active: root.active_tab == 1;
                 horizontal-stretch: 1;
                 clicked => { root.active_tab = 1; }
             }
             TabChip {
-                label: "3. Bild & Farbe";
+                label: I18n.tab_image;
                 active: root.active_tab == 2;
                 horizontal-stretch: 1;
                 clicked => { root.active_tab = 2; }
             }
             TabChip {
-                label: "4. System";
+                label: I18n.tab_system;
                 active: root.active_tab == 3;
                 horizontal-stretch: 1;
                 clicked => { root.active_tab = 3; }
@@ -359,26 +509,26 @@ export component SettingsWindow inherits Window {
                 padding: 2px;
                 spacing: 12px;
 
-                // TAB 0: Verbindung
+                // TAB 0: Connection
                 if root.active_tab == 0 : VerticalBox {
                     padding: 0px;
                     spacing: 12px;
 
                     SectionCard {
-                        title: "WLED-Controller Verbindung";
+                        title: I18n.section_wled;
 
                         HorizontalBox {
                             padding: 0px;
                             spacing: 10px;
                             Text {
-                                text: "WLED IP-Adresse:";
+                                text: I18n.label_wled_ip;
                                 color: #e4e4e7;
                                 width: 140px;
                                 vertical-alignment: center;
                             }
                             LineEdit {
                                 text <=> root.wled_ip;
-                                placeholder-text: "z. B. 192.168.1.50";
+                                placeholder-text: I18n.placeholder_wled_ip;
                                 horizontal-stretch: 1;
                             }
                         }
@@ -387,7 +537,7 @@ export component SettingsWindow inherits Window {
                             padding: 0px;
                             spacing: 10px;
                             Text {
-                                text: "UDP Port:";
+                                text: I18n.label_udp_port;
                                 color: #e4e4e7;
                                 width: 140px;
                                 vertical-alignment: center;
@@ -403,13 +553,13 @@ export component SettingsWindow inherits Window {
                             padding: 0px;
                             spacing: 10px;
                             Text {
-                                text: "UDP-Protokoll:";
+                                text: I18n.label_protocol;
                                 color: #e4e4e7;
                                 width: 140px;
                                 vertical-alignment: center;
                             }
                             ComboBox {
-                                model: ["DRGB (WLED Standard)", "DDP (Distributed Display)", "WARLS (Legacy)"];
+                                model: I18n.protocol_options;
                                 current-index <=> root.protocol_index;
                                 horizontal-stretch: 1;
                             }
@@ -419,7 +569,7 @@ export component SettingsWindow inherits Window {
                             padding: 0px;
                             spacing: 12px;
                             Button {
-                                text: "Verbindung testen (UDP Probe)";
+                                text: I18n.btn_test_connection;
                                 clicked => { root.test-connection(); }
                             }
                             Text {
@@ -431,92 +581,90 @@ export component SettingsWindow inherits Window {
                             }
                         }
                     }
-
-                    SectionCard {
-                        title: "Hinweise zu WLED";
-                        Text {
-                            text: "• Stellen Sie in WLED unter Config → Sync Interfaces sicher, dass 'Receive Realtime' auf Port 21324 (DRGB) bzw. Port 4048 (DDP) aktiv ist.\n• Änderungen greifen nach Klick auf 'Übernehmen & Speichern' ohne Neustart verzögerungsfrei.";
-                            color: #a1a1aa;
-                            font-size: 12px;
-                            wrap: word-wrap;
-                        }
-                    }
                 }
 
-                // TAB 1: Monitore & LED-Geometrie
+                // TAB 1: Monitors & LED Geometry
                 if root.active_tab == 1 : VerticalBox {
                     padding: 0px;
                     spacing: 12px;
 
-                    SectionCard {
-                        title: "Erkannte System-Monitore";
+                    Rectangle {
+                        background: #18181b;
+                        border-color: #27272a;
+                        border-width: 1px;
+                        border-radius: 10px;
 
-                        HorizontalBox {
-                            padding: 0px;
+                        VerticalBox {
+                            padding: 14px;
                             spacing: 10px;
-                            Text {
-                                text: "Binden Sie beliebig viele erkannte Monitore in Ihre LED-Kette ein:";
-                                color: #a1a1aa;
-                                font-size: 12px;
-                                vertical-alignment: center;
-                                horizontal-stretch: 1;
-                                wrap: word-wrap;
-                            }
-                            Button {
-                                text: "Erkennen";
-                                clicked => { root.detect-monitors(); }
-                            }
-                        }
-
-                        for dm in root.detected_monitors : Rectangle {
-                            background: #27272a;
-                            border-radius: 8px;
-                            border-width: 1px;
-                            border-color: dm.is_added ? #065f46 : #3f3f46;
 
                             HorizontalBox {
-                                padding: 8px;
+                                padding: 0px;
                                 spacing: 10px;
-
-                                VerticalBox {
-                                    padding: 0px;
-                                    spacing: 2px;
+                                Text {
+                                    text: I18n.section_detected_monitors;
+                                    color: #f4f4f5;
+                                    font-size: 14px;
+                                    font-weight: 700;
+                                    vertical-alignment: center;
                                     horizontal-stretch: 1;
-                                    Text {
-                                        text: dm.label;
-                                        color: #f4f4f5;
-                                        font-size: 12px;
-                                        font-weight: 700;
-                                    }
-                                    Text {
-                                        text: "Auflösung: " + dm.resolution + " • Index " + dm.mss_index;
-                                        color: #a1a1aa;
-                                        font-size: 11px;
-                                    }
                                 }
-
-                                if dm.is_added : Rectangle {
-                                    height: 28px;
-                                    min-width: 106px;
-                                    border-radius: 6px;
-                                    background: #064e3b;
-                                    border-width: 1px;
-                                    border-color: #10b981;
-
-                                    Text {
-                                        text: "✓ Eingebunden";
-                                        color: #34d399;
-                                        font-size: 11px;
-                                        font-weight: 700;
-                                        horizontal-alignment: center;
-                                        vertical-alignment: center;
-                                    }
+                                Button {
+                                    text: I18n.btn_detect;
+                                    clicked => { root.detect-monitors(); }
                                 }
+                            }
 
-                                if !dm.is_added : Button {
-                                    text: "+ Einbinden";
-                                    primary: true;
-                                    clicked => { root.add-monitor(dm.mss_index); }
+                            for dm in root.detected_monitors : Rectangle {
+                                background: #27272a;
+                                border-radius: 8px;
+                                border-width: 1px;
+                                border-color: dm.is_added ? #065f46 : #3f3f46;
+
+                                HorizontalBox {
+                                    padding: 8px;
+                                    spacing: 10px;
+
+                                    VerticalBox {
+                                        padding: 0px;
+                                        spacing: 2px;
+                                        horizontal-stretch: 1;
+                                        Text {
+                                            text: dm.label;
+                                            color: #f4f4f5;
+                                            font-size: 12px;
+                                            font-weight: 700;
+                                        }
+                                        Text {
+                                            text: dm.resolution + " • #" + dm.mss_index;
+                                            color: #a1a1aa;
+                                            font-size: 11px;
+                                        }
+                                    }
+
+                                    if dm.is_added : Rectangle {
+                                        height: 28px;
+                                        min-width: 106px;
+                                        border-radius: 6px;
+                                        background: #064e3b;
+                                        border-width: 1px;
+                                        border-color: #10b981;
+
+                                        Text {
+                                            text: I18n.badge_added;
+                                            color: #34d399;
+                                            font-size: 11px;
+                                            font-weight: 700;
+                                            horizontal-alignment: center;
+                                            vertical-alignment: center;
+                                        }
+                                    }
+
+                                    if !dm.is_added : Button {
+                                        text: I18n.btn_add;
+                                        primary: true;
+                                        clicked => { root.add-monitor(dm.mss_index); }
+                                    }
                                 }
                             }
                         }
@@ -554,7 +702,7 @@ export component SettingsWindow inherits Window {
                                     border-color: #10b981;
 
                                     Text {
-                                        text: (mon.leds_top + mon.leds_bottom + mon.leds_left + mon.leds_right) + " LEDs";
+                                        text: (mon.leds_top + mon.leds_bottom + mon.leds_left + mon.leds_right) + " " + I18n.leds_unit;
                                         color: #34d399;
                                         font-size: 11px;
                                         font-weight: 700;
@@ -576,7 +724,7 @@ export component SettingsWindow inherits Window {
                                 }
 
                                 Button {
-                                    text: "Entfernen";
+                                    text: I18n.btn_remove;
                                     enabled: root.configured_monitors.length > 1;
                                     clicked => { root.remove-monitor(idx); }
                                 }
@@ -585,7 +733,7 @@ export component SettingsWindow inherits Window {
                             HorizontalBox {
                                 padding: 0px;
                                 spacing: 12px;
-                                Text { text: "Oben:"; color: #e4e4e7; width: 62px; vertical-alignment: center; }
+                                Text { text: I18n.label_top; color: #e4e4e7; width: 66px; vertical-alignment: center; }
                                 SpinBox {
                                     value: mon.leds_top;
                                     minimum: 0;
@@ -593,7 +741,7 @@ export component SettingsWindow inherits Window {
                                     horizontal-stretch: 1;
                                     edited(v) => { root.update-monitor-leds(idx, 0, v); }
                                 }
-                                Text { text: "Unten:"; color: #e4e4e7; width: 62px; vertical-alignment: center; }
+                                Text { text: I18n.label_bottom; color: #e4e4e7; width: 66px; vertical-alignment: center; }
                                 SpinBox {
                                     value: mon.leds_bottom;
                                     minimum: 0;
@@ -606,7 +754,7 @@ export component SettingsWindow inherits Window {
                             HorizontalBox {
                                 padding: 0px;
                                 spacing: 12px;
-                                Text { text: "Links:"; color: #e4e4e7; width: 62px; vertical-alignment: center; }
+                                Text { text: I18n.label_left; color: #e4e4e7; width: 66px; vertical-alignment: center; }
                                 SpinBox {
                                     value: mon.leds_left;
                                     minimum: 0;
@@ -614,7 +762,7 @@ export component SettingsWindow inherits Window {
                                     horizontal-stretch: 1;
                                     edited(v) => { root.update-monitor-leds(idx, 2, v); }
                                 }
-                                Text { text: "Rechts:"; color: #e4e4e7; width: 62px; vertical-alignment: center; }
+                                Text { text: I18n.label_right; color: #e4e4e7; width: 66px; vertical-alignment: center; }
                                 SpinBox {
                                     value: mon.leds_right;
                                     minimum: 0;
@@ -628,13 +776,13 @@ export component SettingsWindow inherits Window {
                                 padding: 0px;
                                 spacing: 10px;
                                 Text {
-                                    text: "Start-Ecke:";
+                                    text: I18n.label_start_corner;
                                     color: #e4e4e7;
-                                    width: 110px;
+                                    width: 115px;
                                     vertical-alignment: center;
                                 }
                                 ComboBox {
-                                    model: ["Unten Links", "Oben Links", "Oben Rechts", "Unten Rechts"];
+                                    model: I18n.corner_options;
                                     current-index: mon.start_corner_index;
                                     horizontal-stretch: 1;
                                     selected(_) => { root.update-monitor-corner(idx, self.current-index); }
@@ -645,13 +793,13 @@ export component SettingsWindow inherits Window {
                                 padding: 0px;
                                 spacing: 10px;
                                 Text {
-                                    text: "Ausrichtung:";
+                                    text: I18n.label_direction;
                                     color: #e4e4e7;
-                                    width: 110px;
+                                    width: 115px;
                                     vertical-alignment: center;
                                 }
                                 CheckBox {
-                                    text: mon.clockwise ? "Uhrzeigersinn (CW)" : "Gegenuhrzeigersinn (CCW)";
+                                    text: mon.clockwise ? I18n.dir_cw : I18n.dir_ccw;
                                     checked: mon.clockwise;
                                     toggled => { root.update-monitor-clockwise(idx, self.checked); }
                                 }
@@ -669,7 +817,7 @@ export component SettingsWindow inherits Window {
                         HorizontalBox {
                             padding: 10px;
                             Text {
-                                text: "Eingebundene Monitore: " + root.configured_monitors.length + " • Gesamtanzahl LEDs in der Kette: " + root.total_leds_all_monitors;
+                                text: I18n.summary_monitors_prefix + root.configured_monitors.length + I18n.summary_total_leds_mid + root.total_leds_all_monitors + " " + I18n.leds_unit;
                                 color: #10b981;
                                 font-size: 12px;
                                 font-weight: 700;
@@ -679,26 +827,20 @@ export component SettingsWindow inherits Window {
                     }
                 }
 
-                // TAB 2: Bild & Farbe (generalized across all monitors)
+                // TAB 2: Image & Color
                 if root.active_tab == 2 : VerticalBox {
                     padding: 0px;
                     spacing: 12px;
 
                     SectionCard {
-                        title: "Abtastung & Bildrate (gilt für alle Monitore)";
+                        title: I18n.section_sampling_fps;
 
                         HorizontalBox {
                             padding: 0px;
                             spacing: 10px;
-                            Text { text: "Abtast-Auflösung:"; color: #e4e4e7; width: 130px; vertical-alignment: center; }
+                            Text { text: I18n.label_resolution; color: #e4e4e7; width: 155px; vertical-alignment: center; }
                             ComboBox {
-                                model: [
-                                    "Auto (Adaptiv)",
-                                    "Performance (64x36)",
-                                    "Balance (128x72)",
-                                    "Quality (256x144)",
-                                    "Ultra (512x288)"
-                                ];
+                                model: I18n.resolution_options;
                                 current-index <=> root.resolution_index;
                                 horizontal-stretch: 1;
                             }
@@ -708,9 +850,9 @@ export component SettingsWindow inherits Window {
                             padding: 0px;
                             spacing: 10px;
                             Text {
-                                text: "FPS-Limit: " + root.fps_limit;
+                                text: I18n.label_fps_limit + root.fps_limit;
                                 color: #e4e4e7;
-                                width: 130px;
+                                width: 155px;
                                 vertical-alignment: center;
                             }
                             Slider {
@@ -724,15 +866,15 @@ export component SettingsWindow inherits Window {
                     }
 
                     SectionCard {
-                        title: "Farbe, Gamma & Kinobalken";
+                        title: I18n.section_color_gamma;
 
                         HorizontalBox {
                             padding: 0px;
                             spacing: 10px;
                             Text {
-                                text: "Helligkeit: " + (Math.round(root.brightness * 10) / 10) + "x";
+                                text: I18n.label_brightness + (Math.round(root.brightness * 10) / 10) + "x";
                                 color: #e4e4e7;
-                                width: 150px;
+                                width: 155px;
                                 vertical-alignment: center;
                             }
                             Slider {
@@ -747,9 +889,9 @@ export component SettingsWindow inherits Window {
                             padding: 0px;
                             spacing: 10px;
                             Text {
-                                text: "Sättigung: " + (Math.round(root.saturation * 10) / 10) + "x";
+                                text: I18n.label_saturation + (Math.round(root.saturation * 10) / 10) + "x";
                                 color: #e4e4e7;
-                                width: 150px;
+                                width: 155px;
                                 vertical-alignment: center;
                             }
                             Slider {
@@ -764,9 +906,9 @@ export component SettingsWindow inherits Window {
                             padding: 0px;
                             spacing: 10px;
                             Text {
-                                text: "Gamma: " + (Math.round(root.gamma * 10) / 10);
+                                text: I18n.label_gamma + (Math.round(root.gamma * 10) / 10);
                                 color: #e4e4e7;
-                                width: 150px;
+                                width: 155px;
                                 vertical-alignment: center;
                             }
                             Slider {
@@ -781,9 +923,9 @@ export component SettingsWindow inherits Window {
                             padding: 0px;
                             spacing: 10px;
                             Text {
-                                text: "Glättung: " + root.smoothing_pct + "%";
+                                text: I18n.label_smoothing + root.smoothing_pct + "%";
                                 color: #e4e4e7;
-                                width: 150px;
+                                width: 155px;
                                 vertical-alignment: center;
                             }
                             Slider {
@@ -799,9 +941,9 @@ export component SettingsWindow inherits Window {
                             padding: 0px;
                             spacing: 10px;
                             Text {
-                                text: "Schwarz-Schwelle: " + root.black_threshold;
+                                text: I18n.label_black_threshold + root.black_threshold;
                                 color: #e4e4e7;
-                                width: 150px;
+                                width: 155px;
                                 vertical-alignment: center;
                             }
                             Slider {
@@ -814,20 +956,20 @@ export component SettingsWindow inherits Window {
                         }
 
                         CheckBox {
-                            text: "Black-Bar-Detection (schwarze Kinobalken automatisch überspringen)";
+                            text: I18n.check_black_bar;
                             checked <=> root.black_bar_detection;
                         }
                     }
 
                     SectionCard {
-                        title: "Abtast-Streifen pro Bildschirmseite";
+                        title: I18n.section_edge_strips;
 
                         HorizontalBox {
                             padding: 0px;
                             spacing: 14px;
 
                             Text {
-                                text: "Stellen Sie für jede Seite separat ein, wie breit der auszuwertende Farbstreifen ist und wie weit entfernt vom Bildschirmrand er beginnt (z. B. um Taskleisten oder HUDs auszublenden).";
+                                text: I18n.edge_strips_hint;
                                 color: #a1a1aa;
                                 font-size: 12px;
                                 wrap: word-wrap;
@@ -896,28 +1038,28 @@ export component SettingsWindow inherits Window {
                         }
 
                         EdgeStripControl {
-                            side_label: "Oben";
+                            side_label: I18n.side_top;
                             accent_color: #38bdf8;
                             depth_pct <=> root.edge_top_depth_pct;
                             offset_pct <=> root.edge_top_offset_pct;
                         }
 
                         EdgeStripControl {
-                            side_label: "Unten";
+                            side_label: I18n.side_bottom;
                             accent_color: #34d399;
                             depth_pct <=> root.edge_bottom_depth_pct;
                             offset_pct <=> root.edge_bottom_offset_pct;
                         }
 
                         EdgeStripControl {
-                            side_label: "Links";
+                            side_label: I18n.side_left;
                             accent_color: #f59e0b;
                             depth_pct <=> root.edge_left_depth_pct;
                             offset_pct <=> root.edge_left_offset_pct;
                         }
 
                         EdgeStripControl {
-                            side_label: "Rechts";
+                            side_label: I18n.side_right;
                             accent_color: #c084fc;
                             depth_pct <=> root.edge_right_depth_pct;
                             offset_pct <=> root.edge_right_offset_pct;
@@ -931,44 +1073,61 @@ export component SettingsWindow inherits Window {
                     spacing: 12px;
 
                     SectionCard {
-                        title: "Betrieb & System-Tray";
-
-                        CheckBox {
-                            text: "Ambilight Capture & Streaming aktiv";
-                            checked <=> root.ambilight_active;
-                            toggled => { root.toggle-active(self.checked); }
-                        }
-
-                        CheckBox {
-                            text: "Eco-Modus (CPU-Last bei Standbildern auf ~0% senken)";
-                            checked <=> root.eco_mode;
-                        }
-
-                        CheckBox {
-                            text: "Autostart beim Windows-Login (HKCU\\...\\Run)";
-                            checked <=> root.autostart;
-                            toggled => { root.toggle-autostart(self.checked); }
-                        }
-
-                        CheckBox {
-                            text: "Immer direkt minimiert im System-Tray starten";
-                            checked <=> root.start_minimized;
-                        }
-
-                        CheckBox {
-                            text: "Beim Start automatisch nach Updates suchen";
-                            checked <=> root.check_updates_on_startup;
-                        }
-                    }
-
-                    SectionCard {
-                        title: "Updates (GitHub Releases)";
+                        title: I18n.section_operation;
 
                         HorizontalBox {
                             padding: 0px;
                             spacing: 10px;
                             Text {
-                                text: "Installierte Version: v" + root.app_version;
+                                text: I18n.label_language;
+                                color: #e4e4e7;
+                                width: 140px;
+                                vertical-alignment: center;
+                            }
+                            ComboBox {
+                                model: ["Deutsch", "English"];
+                                current-index: root.language_index;
+                                horizontal-stretch: 1;
+                                selected(_) => { root.change-language(self.current-index); }
+                            }
+                        }
+
+                        CheckBox {
+                            text: I18n.check_ambilight_active;
+                            checked <=> root.ambilight_active;
+                            toggled => { root.toggle-active(self.checked); }
+                        }
+
+                        CheckBox {
+                            text: I18n.check_eco_mode;
+                            checked <=> root.eco_mode;
+                        }
+
+                        CheckBox {
+                            text: I18n.check_autostart;
+                            checked <=> root.autostart;
+                            toggled => { root.toggle-autostart(self.checked); }
+                        }
+
+                        CheckBox {
+                            text: I18n.check_start_minimized;
+                            checked <=> root.start_minimized;
+                        }
+
+                        CheckBox {
+                            text: I18n.check_updates_startup;
+                            checked <=> root.check_updates_on_startup;
+                        }
+                    }
+
+                    SectionCard {
+                        title: I18n.section_updates;
+
+                        HorizontalBox {
+                            padding: 0px;
+                            spacing: 10px;
+                            Text {
+                                text: I18n.label_installed_version + root.app_version;
                                 color: #f4f4f5;
                                 font-size: 12px;
                                 font-weight: 700;
@@ -976,7 +1135,7 @@ export component SettingsWindow inherits Window {
                                 horizontal-stretch: 1;
                             }
                             Button {
-                                text: root.update_checking ? "Prüfe..." : "Nach Updates suchen";
+                                text: root.update_checking ? I18n.btn_checking : I18n.btn_check_updates;
                                 enabled: !root.update_checking;
                                 clicked => { root.check-for-updates(); }
                             }
@@ -985,16 +1144,6 @@ export component SettingsWindow inherits Window {
                         Text {
                             text: root.update_status_text;
                             color: root.update_status_error ? #f87171 : #a1a1aa;
-                            font-size: 12px;
-                            wrap: word-wrap;
-                        }
-                    }
-
-                    SectionCard {
-                        title: "Info & Ressourcen";
-                        Text {
-                            text: "GloWled v" + root.app_version + " — Native Rust Single-Binary mit Slint UI.\nBeim Klick auf [X] wird nur das Fenster ausgeblendet (0% GPU/GUI-Overhead), während der Capture-Worker unauffällig im System-Tray weiterläuft.";
-                            color: #a1a1aa;
                             font-size: 12px;
                             wrap: word-wrap;
                         }
@@ -1022,12 +1171,12 @@ export component SettingsWindow inherits Window {
             }
 
             Button {
-                text: "In Tray ausblenden";
+                text: I18n.btn_hide_to_tray;
                 clicked => { root.hide-to-tray(); }
             }
 
             Button {
-                text: "Übernehmen & Speichern";
+                text: I18n.btn_apply_save;
                 primary: true;
                 clicked => { root.apply-settings(); }
             }
@@ -1036,7 +1185,7 @@ export component SettingsWindow inherits Window {
 }
 
 export component UpdateDialog inherits Window {
-    title: "GloWled — Software-Update verfügbar";
+    title: I18n.update_dialog_title;
     preferred-width: 540px;
     preferred-height: 440px;
     min-width: 460px;
@@ -1066,7 +1215,7 @@ export component UpdateDialog inherits Window {
             padding: 0px;
             spacing: 10px;
             Text {
-                text: "Neue GloWled-Version verfügbar";
+                text: I18n.update_heading;
                 color: #38bdf8;
                 font-size: 18px;
                 font-weight: 800;
@@ -1092,22 +1241,22 @@ export component UpdateDialog inherits Window {
         }
 
         SectionCard {
-            title: "Versionsübersicht";
+            title: I18n.update_section_version;
             Text {
-                text: "Aktuelle Version: v" + root.current_version + "   →   Neue Version: v" + root.new_version;
+                text: I18n.update_current_prefix + root.current_version + I18n.update_new_prefix + root.new_version;
                 color: #f4f4f5;
                 font-size: 13px;
                 font-weight: 700;
             }
             if root.asset_name != "" : Text {
-                text: "Download-Paket: " + root.asset_name;
+                text: I18n.update_package_prefix + root.asset_name;
                 color: #a1a1aa;
                 font-size: 11px;
             }
         }
 
         SectionCard {
-            title: "Release-Notes / Changelog";
+            title: I18n.update_section_notes;
             vertical-stretch: 1;
 
             ScrollView {
@@ -1129,7 +1278,7 @@ export component UpdateDialog inherits Window {
         }
 
         Text {
-            text: "Möchten Sie das Update jetzt herunterladen und installieren?";
+            text: I18n.update_confirm_prompt;
             color: #e4e4e7;
             font-size: 12px;
             font-weight: 600;
@@ -1141,13 +1290,13 @@ export component UpdateDialog inherits Window {
             alignment: end;
 
             Button {
-                text: "Später";
+                text: I18n.btn_later;
                 enabled: !root.is_busy;
                 clicked => { root.dismiss-update(); }
             }
 
             Button {
-                text: root.is_busy ? "Installiere..." : "Jetzt aktualisieren";
+                text: root.is_busy ? I18n.btn_installing : I18n.btn_update_now;
                 primary: true;
                 enabled: !root.is_busy;
                 clicked => { root.install-update(); }

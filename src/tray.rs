@@ -1,9 +1,12 @@
 //! System tray integration using `tray-icon` and `muda` native menus.
 
+use std::cell::Cell;
+
 use muda::{Menu, MenuEvent, MenuItem, PredefinedMenuItem};
 use tray_icon::{Icon, MouseButton, MouseButtonState, TrayIcon, TrayIconBuilder, TrayIconEvent};
 
 use crate::error::{GlowledError, Result};
+use crate::i18n::Language;
 
 const EMBEDDED_ICO: &[u8] = include_bytes!("../icon.ico");
 
@@ -23,17 +26,19 @@ pub struct TrayManager {
     open_item: MenuItem,
     update_item: MenuItem,
     quit_item: MenuItem,
+    language: Cell<Language>,
 }
 
 impl TrayManager {
-    /// Creates the system tray icon and context menu (`Status`, `Einstellungen öffnen`, `Nach Updates suchen`, `Beenden`).
-    pub fn new(initial_active: bool) -> Result<Self> {
+    /// Creates the system tray icon and localized context menu.
+    pub fn new(initial_active: bool, language: Language) -> Result<Self> {
         let icon = load_tray_icon()?;
+        let t = language.translations();
 
-        let status_item = MenuItem::new(status_label(initial_active), true, None);
-        let open_item = MenuItem::new("Einstellungen öffnen", true, None);
-        let update_item = MenuItem::new("Nach Updates suchen", true, None);
-        let quit_item = MenuItem::new("Beenden", true, None);
+        let status_item = MenuItem::new(status_label(initial_active, language), true, None);
+        let open_item = MenuItem::new(t.tray_open_settings, true, None);
+        let update_item = MenuItem::new(t.tray_check_updates, true, None);
+        let quit_item = MenuItem::new(t.tray_quit, true, None);
 
         let menu = Menu::new();
         menu.append(&status_item)
@@ -51,7 +56,7 @@ impl TrayManager {
 
         let tray_icon = TrayIconBuilder::new()
             .with_menu(Box::new(menu))
-            .with_tooltip(tooltip_label(initial_active))
+            .with_tooltip(tooltip_label(initial_active, language))
             .with_icon(icon)
             .build()
             .map_err(|e| GlowledError::Tray(format!("Failed to build TrayIcon: {e}")))?;
@@ -62,13 +67,30 @@ impl TrayManager {
             open_item,
             update_item,
             quit_item,
+            language: Cell::new(language),
         })
     }
 
     /// Updates the menu item text and tooltip when Ambilight active/paused state changes.
     pub fn set_active(&self, active: bool) {
-        self.status_item.set_text(status_label(active));
-        let _ = self._tray_icon.set_tooltip(Some(tooltip_label(active)));
+        let lang = self.language.get();
+        self.status_item.set_text(status_label(active, lang));
+        let _ = self
+            ._tray_icon
+            .set_tooltip(Some(tooltip_label(active, lang)));
+    }
+
+    /// Updates all tray menu labels and tooltip immediately when the language changes.
+    pub fn set_language(&self, language: Language, active: bool) {
+        self.language.set(language);
+        let t = language.translations();
+        self.status_item.set_text(status_label(active, language));
+        self.open_item.set_text(t.tray_open_settings);
+        self.update_item.set_text(t.tray_check_updates);
+        self.quit_item.set_text(t.tray_quit);
+        let _ = self
+            ._tray_icon
+            .set_tooltip(Some(tooltip_label(active, language)));
     }
 
     /// Non-blocking poll for tray clicks and menu item selections (intended for a 50 ms Slint timer).
@@ -108,19 +130,21 @@ impl TrayManager {
     }
 }
 
-fn status_label(active: bool) -> &'static str {
+fn status_label(active: bool, language: Language) -> &'static str {
+    let t = language.translations();
     if active {
-        "Status: Aktiv (Klicken zum Pausieren)"
+        t.tray_status_active
     } else {
-        "Status: Pausiert (Klicken zum Aktivieren)"
+        t.tray_status_paused
     }
 }
 
-fn tooltip_label(active: bool) -> &'static str {
+fn tooltip_label(active: bool, language: Language) -> &'static str {
+    let t = language.translations();
     if active {
-        "GloWled — Aktiv"
+        t.tray_tooltip_active
     } else {
-        "GloWled — Pausiert"
+        t.tray_tooltip_paused
     }
 }
 
@@ -167,5 +191,29 @@ mod tests {
     #[test]
     fn embedded_icon_decodes_cleanly() {
         assert!(load_tray_icon().is_ok());
+    }
+
+    #[test]
+    fn tray_labels_localize_cleanly() {
+        assert_eq!(
+            status_label(true, Language::German),
+            "Status: Aktiv (Klicken zum Pausieren)"
+        );
+        assert_eq!(
+            status_label(false, Language::German),
+            "Status: Pausiert (Klicken zum Aktivieren)"
+        );
+        assert_eq!(
+            status_label(true, Language::English),
+            "Status: Active (Click to Pause)"
+        );
+        assert_eq!(
+            status_label(false, Language::English),
+            "Status: Paused (Click to Resume)"
+        );
+        assert_ne!(
+            tooltip_label(true, Language::German),
+            tooltip_label(true, Language::English)
+        );
     }
 }

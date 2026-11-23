@@ -7,6 +7,7 @@ use std::path::{Path, PathBuf};
 use serde::{Deserialize, Serialize};
 
 use crate::error::{GlowledError, Result};
+use crate::i18n::Language;
 
 /// Supported WLED realtime UDP streaming protocols.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -333,6 +334,7 @@ pub struct AppConfig {
     pub autostart: bool,
     pub check_updates_on_startup: bool,
     pub last_known_exe_path: String,
+    pub language: Language,
     pub monitors: Vec<MonitorConfig>,
 }
 
@@ -359,6 +361,7 @@ impl Default for AppConfig {
             autostart: false,
             check_updates_on_startup: true,
             last_known_exe_path: String::new(),
+            language: Language::default(),
             monitors: vec![MonitorConfig::default()],
         }
     }
@@ -898,5 +901,54 @@ mod tests {
         assert_eq!(cfg.edge_sampling.left.offset, 0.0);
         assert!((cfg.edge_sampling.right.depth - 0.25).abs() < 1e-5);
         assert!((cfg.edge_sampling.right.offset - 0.20).abs() < 1e-5);
+    }
+
+    #[test]
+    fn language_persists_and_invalid_language_falls_back_safely() {
+        let dir = std::env::temp_dir().join(format!(
+            "glowled_lang_cfg_test_{}_{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        fs::create_dir_all(&dir).unwrap();
+        let cfg_path = dir.join("config.json");
+
+        // Missing language key -> German default
+        fs::write(&cfg_path, r#"{ "ip": "10.0.0.5", "port": 4048 }"#).unwrap();
+        let loaded = load_config_from_path(&cfg_path);
+        assert_eq!(loaded.ip, "10.0.0.5");
+        assert_eq!(loaded.port, 4048);
+        assert_eq!(loaded.language, Language::German);
+
+        // Invalid string language -> German fallback, other settings preserved
+        fs::write(
+            &cfg_path,
+            r#"{ "ip": "10.0.0.6", "language": "es-ES", "fps": 45 }"#,
+        )
+        .unwrap();
+        let invalid_str = load_config_from_path(&cfg_path);
+        assert_eq!(invalid_str.ip, "10.0.0.6");
+        assert_eq!(invalid_str.fps, 45);
+        assert_eq!(invalid_str.language, Language::German);
+
+        // Wrong JSON type for language -> German fallback
+        fs::write(&cfg_path, r#"{ "ip": "10.0.0.7", "language": 42 }"#).unwrap();
+        let invalid_num = load_config_from_path(&cfg_path);
+        assert_eq!(invalid_num.ip, "10.0.0.7");
+        assert_eq!(invalid_num.language, Language::German);
+
+        // Save English & reload
+        let en_cfg = AppConfig {
+            language: Language::English,
+            ..Default::default()
+        };
+        save_config_to_path(&en_cfg, &cfg_path).unwrap();
+        let reloaded = load_config_from_path(&cfg_path);
+        assert_eq!(reloaded.language, Language::English);
+
+        let _ = fs::remove_dir_all(&dir);
     }
 }
